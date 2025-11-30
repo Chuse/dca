@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Klever DCA - Configuración</title>
+    <title>Klever DCA - Configuración del Plan</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; text-align: center; background-color: #f0f4f8; }
         .container { max-width: 500px; margin: 0 auto; padding: 30px; background-color: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
@@ -18,6 +18,33 @@
         .form-group { text-align: left; margin-bottom: 15px; }
         .form-group label { display: block; margin-bottom: 5px; font-weight: 600; color: #333; }
         .form-group input { width: 95%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+
+        /* Estilo para el estado conectado (similar al screenshot) */
+        #wallet-info {
+            padding: 10px;
+            border: 1px solid #d4edda;
+            background-color: #f6fff8;
+            border-radius: 8px;
+            display: inline-block;
+        }
+        #wallet-info p {
+            margin: 0;
+            color: #555;
+            font-size: 0.9em;
+        }
+        #wallet-info strong {
+            color: #1e3a8a;
+            font-size: 1.1em;
+            display: block;
+        }
+        .green-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background-color: #10b981;
+            border-radius: 50%;
+            margin-left: 5px;
+        }
     </style>
 </head>
 <body>
@@ -26,10 +53,17 @@
         <h2>Iniciador de DCA en KleverChain 🚀</h2>
         <hr>
         
-        <button id="connectWallet" class="button" onclick="connectKleverWallet()">
-            🔌 Conectar Klever Wallet
-        </button>
-        
+        <div id="wallet-display">
+            <button id="connectWallet" class="button" onclick="connectKleverWallet()">
+                🔌 Conectar Klever Wallet
+            </button>
+
+            <div id="wallet-info" style="display: none;">
+                <p>Connected Wallet <span class="green-dot"></span></p>
+                <strong id="connected-address"></strong>
+            </div>
+        </div>
+
         <div id="status">
             <p>Estado de la Conexión: <strong id="wallet-address">Desconectado</strong></p>
         </div>
@@ -39,12 +73,12 @@
         <h3>Configuración del Plan DCA</h3>
         <div class="form-group">
             <label for="deposit-amount">Monto Total a Depositar (USDT):</label>
-            <input type="number" id="deposit-amount" value="100" min="1" disabled>
+            <input type="number" id="deposit-amount" value="100" min="1">
         </div>
         
         <div class="form-group">
             <label for="duration-months">Duración (Meses):</label>
-            <input type="number" id="duration-months" value="6" min="1" disabled>
+            <input type="number" id="duration-months" value="6" min="1">
         </div>
         
         <button id="startDCA" class="button" onclick="startDCA()" disabled>
@@ -55,131 +89,180 @@
 
     <script>
         // --- VARIABLES GLOBALES (A REEMPLAZAR EN PRODUCCIÓN) ---
-        const USDT_CONTRACT_ADDRESS = 'klv_address_del_token_usdt'; 
-        const DCA_CONTRACT_ADDRESS = 'klv_address_de_tu_k_app_dca';
-        let isWalletConnected = false;
+        // ESTAS DIRECCIONES SON PLACEHOLDERS - DEBEN SER REALES EN PRODUCCIÓN
+        const USDT_CONTRACT_ADDRESS = 'KLV_DIRECCIÓN_DE_TU_TOKEN_USDT'; 
+        const DCA_CONTRACT_ADDRESS = 'KLV_DIRECCIÓN_DE_TU_K_APP_DCA';
+
+        // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN ---
 
         /**
-         * 🔌 Intenta conectar con la extensión de Klever Wallet
+         * Verifica el estado de la conexión y los campos para habilitar el botón DCA.
          */
-async function connectKleverWallet() {
-    const statusElement = document.getElementById('wallet-address');
-    const connectButton = document.getElementById('connectWallet');
+        function checkFormAndEnableDCA() {
+            const totalAmount = parseFloat(document.getElementById('deposit-amount').value);
+            const durationMonths = parseInt(document.getElementById('duration-months').value);
+            const startDCAButton = document.getElementById('startDCA');
+            
+            // Verificamos si la API de Klever ha cargado una dirección (estado conectado)
+            const isConnected = !!window.kleverWeb && !!window.kleverWeb.getWalletAddress();
+            
+            // Los campos son válidos si son números positivos
+            const areFieldsValid = totalAmount > 0 && durationMonths > 0;
 
-    connectButton.disabled = true;
-    connectButton.innerText = 'Conectando...';
-
-    try {
-        // 1. Detección: Usamos 'kleverWeb' como en su código funcional.
-        if (typeof window === "undefined" || !window.kleverWeb) {
-            throw new Error("Klever Extension not found");
+            if (isConnected && areFieldsValid) {
+                startDCAButton.disabled = false;
+                startDCAButton.title = '';
+            } else {
+                startDCAButton.disabled = true;
+                if (!isConnected) {
+                    startDCAButton.title = 'Conecta la wallet para habilitar.';
+                } else {
+                    startDCAButton.title = 'Rellena todos los campos con valores válidos.';
+                }
+            }
         }
 
-        // 2. Inicialización de la API (Paso crucial omitido en mi versión anterior)
-        await window.kleverWeb.initialize();
+        // --- FUNCIONES DE CONEXIÓN ---
 
-        // 3. Obtención de la Dirección: Se asume la conexión o se fuerza la ventana de conexión.
-        const userAddress = window.kleverWeb.getWalletAddress();
-        
-        if (!userAddress) {
-            // Si no hay dirección después de initialize(), podría ser necesario un paso de 'login'
-            // En este caso, asumimos que el usuario debe interactuar con la extensión para loggearse.
-            throw new Error("No se pudo obtener la dirección. Por favor, asegúrate de estar loggeado en la extensión.");
-        }
-
-        // 4. Conexión exitosa: mostrar la dirección y habilitar formulario.
-        statusElement.innerHTML = `✅ Conectado: <strong>${userAddress.substring(0, 10)}...${userAddress.substring(userAddress.length - 8)}</strong>`;
-        
-        // Habilitar formulario DCA
-        document.getElementById('deposit-amount').disabled = false;
-        document.getElementById('duration-months').disabled = false;
-        document.getElementById('startDCA').disabled = false;
-
-        connectButton.innerText = 'Wallet Conectada';
-        // No volvemos a habilitar connectButton, ya que ya estamos conectados.
-
-    } catch (error) {
-        console.error("Error al conectar Klever Wallet:", error.message);
-        statusElement.innerHTML = `❌ Error: ${error.message}`;
-        
-        // Restaurar estado del botón
-        connectButton.disabled = false;
-        connectButton.innerText = '🔌 Conectar Klever Wallet';
-    }
-}
         /**
-         * 💰 Inicia el proceso de DCA (Aprobación + Llamada al Contrato)
+         * 🔌 Intenta conectar con la extensión de Klever Wallet usando kleverWeb
+         */
+        async function connectKleverWallet() {
+            const statusElement = document.getElementById('wallet-address');
+            const connectButton = document.getElementById('connectWallet');
+
+            connectButton.disabled = true;
+            connectButton.innerText = 'Conectando...';
+
+            try {
+                // 1. Detección
+                if (typeof window === "undefined" || !window.kleverWeb) {
+                    throw new Error("Klever Extension not found");
+                }
+
+                // 2. Inicialización y obtención de la dirección
+                await window.kleverWeb.initialize();
+                const userAddress = window.kleverWeb.getWalletAddress();
+                
+                if (!userAddress) {
+                    // Si no hay dirección, el usuario debe interactuar con la extensión
+                    throw new Error("Conexión fallida. Asegúrate de estar loggeado en la extensión.");
+                }
+
+                // 3. Conexión exitosa: Actualización del DOM (Toggle)
+                const shortAddress = userAddress.substring(0, 7) + '...' + userAddress.substring(userAddress.length - 7);
+                
+                // Mostrar el nuevo display de estado (estilo screenshot)
+                document.getElementById('connectWallet').style.display = 'none'; // Ocultar el botón
+                document.getElementById('wallet-info').style.display = 'block'; // Mostrar el nuevo display
+                document.getElementById('connected-address').innerText = shortAddress;
+                
+                // Mostrar el estado completo en el div principal
+                statusElement.innerHTML = `✅ Conectado: <strong>${userAddress}</strong>`;
+                
+                // 4. Verificar y habilitar el formulario
+                checkFormAndEnableDCA();
+
+            } catch (error) {
+                console.error("Error al conectar Klever Wallet:", error.message);
+                statusElement.innerHTML = `❌ Error: ${error.message}`;
+                
+                // Restaurar estado del botón
+                connectButton.disabled = false;
+                connectButton.innerText = '🔌 Conectar Klever Wallet';
+                
+                // Ocultar el display conectado si estaba visible
+                document.getElementById('connectWallet').style.display = 'block';
+                document.getElementById('wallet-info').style.display = 'none';
+                
+                // Deshabilitar formulario
+                checkFormAndEnableDCA(); 
+            }
+        }
+
+        // --- FUNCIÓN DE INICIO DE DCA ---
+        
+        /**
+         * 💰 Inicia el proceso de DCA (Aprobación + Llamada al Contrato initDCA)
          */
         async function startDCA() {
-            if (!isWalletConnected) {
-                alert("Primero debes conectar tu Klever Wallet.");
-                return;
-            }
+            // Ya no necesitamos la comprobación 'isWalletConnected' porque el botón está deshabilitado si no lo está.
             
-            const provider = window.klever;
             const totalAmount = document.getElementById('deposit-amount').value;
             const durationMonths = document.getElementById('duration-months').value;
 
-            if (!totalAmount || totalAmount <= 0 || !durationMonths || durationMonths <= 0) {
-                alert("Por favor, introduce montos válidos.");
-                return;
+            // La validación ya se hizo con checkFormAndEnableDCA, pero es buena práctica verificar de nuevo.
+            if (!window.kleverWeb.getWalletAddress() || totalAmount <= 0 || durationMonths <= 0) {
+                 alert("Por favor, verifica la conexión y los campos.");
+                 return;
             }
 
-            document.getElementById('startDCA').disabled = true;
-            document.getElementById('startDCA').innerText = 'Procesando...';
+            const startDCAButton = document.getElementById('startDCA');
+            startDCAButton.disabled = true;
+            startDCAButton.innerText = 'Procesando Transacciones...';
 
             // --- PASO 1: APROBACIÓN DEL GASTO (USDT) ---
             try {
-                // NOTA: En KleverChain, los argumentos de un contrato se codifican
-                // Aquí usamos un método simple para demostrar la estructura de la llamada
                 console.log("Iniciando Transacción 1/2: Aprobación de USDT...");
                 
-                const approveTx = await provider.request({
-                    method: 'klever_sendTransaction',
-                    params: {
-                        contract: USDT_CONTRACT_ADDRESS,
-                        method: 'approve', 
-                        // Los argumentos deben ser formateados según el KLV SDK
-                        args: [DCA_CONTRACT_ADDRESS, totalAmount]
-                    }
+                // Llamada a la función 'approve' del contrato del token USDT
+                const approveTx = await window.kleverWeb.signTransaction({
+                    contract: USDT_CONTRACT_ADDRESS,
+                    method: 'approve', 
+                    args: [DCA_CONTRACT_ADDRESS, totalAmount], // Aprobamos el total al contrato DCA
+                    fee: 10000 // Ejemplo de fee, ajustar según la necesidad de la red
                 });
-                console.log("Aprobación TX ID:", approveTx);
+                
+                console.log("Aprobación TX ID:", approveTx.txHash);
 
-                // IMPORTANTE: En producción, se debe esperar a que la TX de aprobación se confirme
-                alert("Aprobación de USDT exitosa. Aceptar para iniciar la segunda transacción...");
+                // NOTA: En un entorno de producción, es recomendable esperar la confirmación
+                alert("Aprobación de USDT exitosa. Pulsa Aceptar para iniciar la SEGUNDA transacción (Configuración del Plan).");
 
             } catch (error) {
                 console.error("Fallo en la Aprobación de USDT:", error);
                 alert("❌ Fallo en la Aprobación de USDT. Verifica la consola.");
-                document.getElementById('startDCA').disabled = false;
-                document.getElementById('startDCA').innerText = '💰 Iniciar DCA y Aprobar Fondos';
+                
+                startDCAButton.disabled = false;
+                startDCAButton.innerText = '💰 Iniciar DCA y Aprobar Fondos';
                 return;
             }
 
             // --- PASO 2: INICIO DE DCA (LLAMADA AL CONTRATO DCA) ---
             try {
                 console.log("Iniciando Transacción 2/2: Configuración del DCA...");
-                const initTx = await provider.request({
-                    method: 'klever_sendTransaction',
-                    params: {
-                        contract: DCA_CONTRACT_ADDRESS,
-                        method: 'initDCA',
-                        // Pasamos la duración al contrato
-                        args: [durationMonths] 
-                    }
+                
+                // Llamada a la función 'initDCA' de su K-App
+                const initTx = await window.kleverWeb.signTransaction({
+                    contract: DCA_CONTRACT_ADDRESS,
+                    method: 'initDCA',
+                    args: [durationMonths] // Pasamos la duración
                 });
-                console.log("Init DCA TX ID:", initTx);
-                alert("🎉 ¡DCA iniciado con éxito! El Keeper de Render hará la primera compra pronto.");
+                
+                console.log("Init DCA TX ID:", initTx.txHash);
+                alert("🎉 ¡DCA iniciado con éxito! El Keeper de Render comenzará las compras a partir de ahora.");
 
             } catch (error) {
                 console.error("Fallo al iniciar el contrato DCA:", error);
-                alert("❌ Fallo al iniciar el contrato DCA. El monto de USDT ha sido aprobado, pero no se configuró el plan.");
+                alert("❌ Fallo al iniciar el contrato DCA. El monto de USDT aún está aprobado, pero el plan NO se configuró.");
             }
             
             // Restablecer estado del botón
-            document.getElementById('startDCA').disabled = false;
-            document.getElementById('startDCA').innerText = '💰 Iniciar DCA y Aprobar Fondos';
+            startDCAButton.disabled = false;
+            startDCAButton.innerText = '💰 Iniciar DCA y Aprobar Fondos';
+            checkFormAndEnableDCA(); // Revisa por si el estado cambió
         }
+        
+        // --- LISTENERS DE LA PÁGINA ---
+
+        // Llamar a la verificación cada vez que el usuario teclea en los campos
+        document.getElementById('deposit-amount').addEventListener('input', checkFormAndEnableDCA);
+        document.getElementById('duration-months').addEventListener('input', checkFormAndEnableDCA);
+
+        // Intentar conectar la wallet tan pronto como la página cargue (si ya está loggeado)
+        window.onload = () => {
+             // Damos un pequeño tiempo para que la extensión se inyecte
+             setTimeout(connectKleverWallet, 500); 
+        };
     </script>
 
 </body>
