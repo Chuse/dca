@@ -82,10 +82,10 @@
 
     <script>
         const TARGET_TESTNET_ADDRESS = 'klv1c3qw2yzgdu0hzwd9arjz6j4ypmf9xya3y2238cmhcsnz26m66y3qvmcfcd';
-        // KLV tiene 6 decimales.
         const KLV_DECIMALS = 6; 
+        const TX_TYPE_SEND = 0; // Tipo de transacción 0 = Send (Envío nativo)
 
-        // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN (KLV) ---
+        // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN ---
 
         function checkFormAndEnableKLVTest() {
             const klvAmount = parseFloat(document.getElementById('klv-amount').value);
@@ -143,7 +143,7 @@
             }
         }
 
-        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (CORREGIDA) ---
+        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (3 PASOS) ---
         
         async function sendKLVTest() {
             const klvAmount = document.getElementById('klv-amount').value;
@@ -158,26 +158,46 @@
             sendButton.innerText = `Enviando ${klvAmount} KLV...`;
 
             try {
-                console.log(`Iniciando transferencia de ${klvAmount} KLV a ${TARGET_TESTNET_ADDRESS}...`);
+                console.log(`Iniciando transferencia de ${klvAmount} KLV a ${TARGET_TESTNET_ADDRESS} (3 pasos)...`);
                 
-                // CORRECCIÓN CLAVE: Multiplicar por 10^6 y formatear como string entero
-                const atomicAmount = (parseFloat(klvAmount) * (10 ** KLV_DECIMALS)).toFixed(0).toString();
+                // 1. CONSTRUCCIÓN DE LA TRANSACCIÓN (buildTransaction)
+                const atomicAmount = (parseFloat(klvAmount) * (10 ** KLV_DECIMALS)).toFixed(0); 
+                
+                const payload = {
+                    receiver: TARGET_TESTNET_ADDRESS,
+                    amount: atomicAmount,
+                    kda: "KLV",
+                };
 
-                const transferTx = await window.kleverWeb.signTransaction({
-                    type: 'Send',
-                    data: {
-                        receiver: TARGET_TESTNET_ADDRESS,
-                        amount: atomicAmount, // USAR EL FORMATO STRING EN UNIDAD ATÓMICA
-                        assetId: 'KLV' 
-                    }
-                });
+                const unsignedTransaction = await window.kleverWeb.buildTransaction([
+                    {
+                        payload,
+                        type: TX_TYPE_SEND, 
+                    },
+                ]);
+
+                // 2. FIRMA DE LA TRANSACCIÓN (signTransaction)
+                const signedTransaction = await window.kleverWeb.signTransaction(
+                    unsignedTransaction
+                );
+
+                // 3. BROADCAST DE LA TRANSACCIÓN (broadcastTransactions)
+                const { data, error } = await window.kleverWeb.broadcastTransactions([
+                    signedTransaction,
+                ]);
                 
-                console.log("Transferencia TX ID:", transferTx.txHash);
-                alert(`🎉 ¡Transferencia de KLV enviada con éxito! TX Hash: ${transferTx.txHash}`);
+                if (error && error.length > 0) {
+                    throw new Error(`Error en el broadcast: ${error[0].message || error[0]}`);
+                }
+
+                const hash = data.txsHashes[0];
+
+                console.log("Transferencia TX ID:", hash);
+                alert(`🎉 ¡Transferencia de KLV enviada con éxito! TX Hash: ${hash}`);
 
             } catch (error) {
                 console.error("Fallo al enviar KLV:", error);
-                alert(`❌ Fallo en la transferencia de KLV. Error: ${error.message}. Asegúrate de estar en Testnet.`);
+                alert(`❌ Fallo en la transferencia de KLV. Error: ${String(error)}. Verifica que la billetera esté en Testnet.`);
             }
             
             sendButton.disabled = false;
@@ -190,6 +210,7 @@
         document.getElementById('klv-amount').addEventListener('input', checkFormAndEnableKLVTest);
 
         window.onload = () => {
+             // Intentar conexión inicial
              setTimeout(connectKleverWallet, 500); 
         };
     </script>
