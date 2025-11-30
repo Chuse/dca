@@ -82,6 +82,8 @@
 
     <script>
         const TARGET_TESTNET_ADDRESS = 'klv1c3qw2yzgdu0hzwd9arjz6j4ypmf9xya3y2238cmhcsnz26m66y3qvmcfcd';
+        // KLV tiene 6 decimales.
+        const KLV_DECIMALS = 6; 
 
         // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN (KLV) ---
 
@@ -101,7 +103,7 @@
             }
         }
 
-        // --- FUNCIÓN DE CONEXIÓN (MANTENIDA) ---
+        // --- FUNCIÓN DE CONEXIÓN ---
 
         async function connectKleverWallet() {
             const connectButton = document.getElementById('connectWallet');
@@ -127,7 +129,6 @@
                 document.getElementById('wallet-info').style.display = 'block';
                 document.getElementById('connected-address').innerText = shortAddress;
                 
-                // Verificar y habilitar el formulario KLV
                 checkFormAndEnableKLVTest();
 
             } catch (error) {
@@ -142,7 +143,7 @@
             }
         }
 
-        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV ---
+        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (CORREGIDA) ---
         
         async function sendKLVTest() {
             const klvAmount = document.getElementById('klv-amount').value;
@@ -159,11 +160,14 @@
             try {
                 console.log(`Iniciando transferencia de ${klvAmount} KLV a ${TARGET_TESTNET_ADDRESS}...`);
                 
+                // CORRECCIÓN CLAVE: Multiplicar por 10^6 y formatear como string entero
+                const atomicAmount = (parseFloat(klvAmount) * (10 ** KLV_DECIMALS)).toFixed(0).toString();
+
                 const transferTx = await window.kleverWeb.signTransaction({
                     type: 'Send',
                     data: {
                         receiver: TARGET_TESTNET_ADDRESS,
-                        amount: klvAmount, 
+                        amount: atomicAmount, // USAR EL FORMATO STRING EN UNIDAD ATÓMICA
                         assetId: 'KLV' 
                     }
                 });
@@ -173,7 +177,7 @@
 
             } catch (error) {
                 console.error("Fallo al enviar KLV:", error);
-                alert("❌ Fallo en la transferencia de KLV. Verifica tu saldo de Testnet KLV.");
+                alert(`❌ Fallo en la transferencia de KLV. Error: ${error.message}. Asegúrate de estar en Testnet.`);
             }
             
             sendButton.disabled = false;
