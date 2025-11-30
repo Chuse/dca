@@ -83,7 +83,7 @@
     <script>
         const TARGET_TESTNET_ADDRESS = 'klv1c3qw2yzgdu0hzwd9arjz6j4ypmf9xya3y2238cmhcsnz26m66y3qvmcfcd';
         const KLV_DECIMALS = 6; 
-        const TX_TYPE_SEND = 0; // Tipo de transacción 0 = Send (Envío nativo)
+        const TX_TYPE_SEND = 0;
 
         // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN ---
 
@@ -143,7 +143,7 @@
             }
         }
 
-        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (3 PASOS) ---
+        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (CORRECCIÓN FINAL DE DATA TYPE) ---
         
         async function sendKLVTest() {
             const klvAmount = document.getElementById('klv-amount').value;
@@ -160,12 +160,12 @@
             try {
                 console.log(`Iniciando transferencia de ${klvAmount} KLV a ${TARGET_TESTNET_ADDRESS} (3 pasos)...`);
                 
-                // 1. CONSTRUCCIÓN DE LA TRANSACCIÓN (buildTransaction)
-                const atomicAmount = (parseFloat(klvAmount) * (10 ** KLV_DECIMALS)).toFixed(0); 
+                // CORRECCIÓN FINAL: Aseguramos que el amount sea un tipo Number (int64)
+                const atomicAmount = Math.round(parseFloat(klvAmount) * (10 ** KLV_DECIMALS)); 
                 
                 const payload = {
                     receiver: TARGET_TESTNET_ADDRESS,
-                    amount: atomicAmount,
+                    amount: atomicAmount, // AHORA ES UN NÚMERO
                     kda: "KLV",
                 };
 
@@ -176,12 +176,10 @@
                     },
                 ]);
 
-                // 2. FIRMA DE LA TRANSACCIÓN (signTransaction)
                 const signedTransaction = await window.kleverWeb.signTransaction(
                     unsignedTransaction
                 );
 
-                // 3. BROADCAST DE LA TRANSACCIÓN (broadcastTransactions)
                 const { data, error } = await window.kleverWeb.broadcastTransactions([
                     signedTransaction,
                 ]);
@@ -197,7 +195,7 @@
 
             } catch (error) {
                 console.error("Fallo al enviar KLV:", error);
-                alert(`❌ Fallo en la transferencia de KLV. Error: ${String(error)}. Verifica que la billetera esté en Testnet.`);
+                alert(`❌ Fallo en la transferencia de KLV. Error: ${String(error)}. VERIFICA QUE ESTÉS EN TESTNET.`);
             }
             
             sendButton.disabled = false;
@@ -210,7 +208,6 @@
         document.getElementById('klv-amount').addEventListener('input', checkFormAndEnableKLVTest);
 
         window.onload = () => {
-             // Intentar conexión inicial
              setTimeout(connectKleverWallet, 500); 
         };
     </script>
