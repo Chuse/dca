@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Klever DCA - Configuración</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; text-align: center; background-color: #f0f4f8; }
+        .container { max-width: 500px; margin: 0 auto; padding: 30px; background-color: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
+        h2 { color: #1e3a8a; }
+        hr { border: 0; height: 1px; background-color: #e0e7ff; margin: 20px 0; }
+        .button { padding: 12px 25px; font-size: 16px; cursor: pointer; border: none; border-radius: 8px; transition: background-color 0.3s; }
+        #connectWallet { background-color: #007bff; color: white; margin-bottom: 15px; }
+        #connectWallet:hover:enabled { background-color: #0056b3; }
+        #startDCA { background-color: #10b981; color: white; margin-top: 20px; }
+        #startDCA:hover:enabled { background-color: #059669; }
+        .button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #status { margin-top: 20px; padding: 15px; border-radius: 8px; background-color: #e0f2f1; color: #065f46; font-weight: bold; }
+        .form-group { text-align: left; margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 600; color: #333; }
+        .form-group input { width: 95%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Iniciador de DCA en KleverChain 🚀</h2>
+        <hr>
+        
+        <button id="connectWallet" class="button" onclick="connectKleverWallet()">
+            🔌 Conectar Klever Wallet
+        </button>
+        
+        <div id="status">
+            <p>Estado de la Conexión: <strong id="wallet-address">Desconectado</strong></p>
+        </div>
+
+        <hr>
+
+        <h3>Configuración del Plan DCA</h3>
+        <div class="form-group">
+            <label for="deposit-amount">Monto Total a Depositar (USDT):</label>
+            <input type="number" id="deposit-amount" value="100" min="1" disabled>
+        </div>
+        
+        <div class="form-group">
+            <label for="duration-months">Duración (Meses):</label>
+            <input type="number" id="duration-months" value="6" min="1" disabled>
+        </div>
+        
+        <button id="startDCA" class="button" onclick="startDCA()" disabled>
+            💰 Iniciar DCA y Aprobar Fondos
+        </button>
+        
+    </div>
+
+    <script>
+        // --- VARIABLES GLOBALES (A REEMPLAZAR EN PRODUCCIÓN) ---
+        const USDT_CONTRACT_ADDRESS = 'klv_address_del_token_usdt'; 
+        const DCA_CONTRACT_ADDRESS = 'klv_address_de_tu_k_app_dca';
+        let isWalletConnected = false;
+
+        /**
+         * 🔌 Intenta conectar con la extensión de Klever Wallet
+         */
+        async function connectKleverWallet() {
+            const provider = window.klever;
+            const statusElement = document.getElementById('wallet-address');
+
+            if (!provider) {
+                statusElement.innerHTML = '⚠️ Por favor, instala la extensión de **Klever Wallet**.';
+                return;
+            }
+
+            try {
+                statusElement.innerHTML = 'Conectando...';
+                const accounts = await provider.request({ method: 'klever_requestAccounts' });
+
+                if (accounts && accounts.length > 0) {
+                    const userAddress = accounts[0];
+                    statusElement.innerHTML = `✅ Conectado: <strong>${userAddress.substring(0, 10)}...${userAddress.substring(userAddress.length - 8)}</strong>`;
+                    
+                    // Actualizar estado y habilitar formulario
+                    isWalletConnected = true;
+                    document.getElementById('connectWallet').disabled = true;
+                    document.getElementById('connectWallet').innerText = 'Wallet Conectada';
+                    
+                    document.getElementById('deposit-amount').disabled = false;
+                    document.getElementById('duration-months').disabled = false;
+                    document.getElementById('startDCA').disabled = false;
+                } else {
+                    statusElement.innerHTML = '❌ Conexión rechazada por el usuario.';
+                }
+            } catch (error) {
+                console.error("Error al conectar Klever Wallet:", error);
+                statusElement.innerHTML = '❌ Error al conectar. Intenta de nuevo.';
+            }
+        }
+
+        /**
+         * 💰 Inicia el proceso de DCA (Aprobación + Llamada al Contrato)
+         */
+        async function startDCA() {
+            if (!isWalletConnected) {
+                alert("Primero debes conectar tu Klever Wallet.");
+                return;
+            }
+            
+            const provider = window.klever;
+            const totalAmount = document.getElementById('deposit-amount').value;
+            const durationMonths = document.getElementById('duration-months').value;
+
+            if (!totalAmount || totalAmount <= 0 || !durationMonths || durationMonths <= 0) {
+                alert("Por favor, introduce montos válidos.");
+                return;
+            }
+
+            document.getElementById('startDCA').disabled = true;
+            document.getElementById('startDCA').innerText = 'Procesando...';
+
+            // --- PASO 1: APROBACIÓN DEL GASTO (USDT) ---
+            try {
+                // NOTA: En KleverChain, los argumentos de un contrato se codifican
+                // Aquí usamos un método simple para demostrar la estructura de la llamada
+                console.log("Iniciando Transacción 1/2: Aprobación de USDT...");
+                
+                const approveTx = await provider.request({
+                    method: 'klever_sendTransaction',
+                    params: {
+                        contract: USDT_CONTRACT_ADDRESS,
+                        method: 'approve', 
+                        // Los argumentos deben ser formateados según el KLV SDK
+                        args: [DCA_CONTRACT_ADDRESS, totalAmount]
+                    }
+                });
+                console.log("Aprobación TX ID:", approveTx);
+
+                // IMPORTANTE: En producción, se debe esperar a que la TX de aprobación se confirme
+                alert("Aprobación de USDT exitosa. Aceptar para iniciar la segunda transacción...");
+
+            } catch (error) {
+                console.error("Fallo en la Aprobación de USDT:", error);
+                alert("❌ Fallo en la Aprobación de USDT. Verifica la consola.");
+                document.getElementById('startDCA').disabled = false;
+                document.getElementById('startDCA').innerText = '💰 Iniciar DCA y Aprobar Fondos';
+                return;
+            }
+
+            // --- PASO 2: INICIO DE DCA (LLAMADA AL CONTRATO DCA) ---
+            try {
+                console.log("Iniciando Transacción 2/2: Configuración del DCA...");
+                const initTx = await provider.request({
+                    method: 'klever_sendTransaction',
+                    params: {
+                        contract: DCA_CONTRACT_ADDRESS,
+                        method: 'initDCA',
+                        // Pasamos la duración al contrato
+                        args: [durationMonths] 
+                    }
+                });
+                console.log("Init DCA TX ID:", initTx);
+                alert("🎉 ¡DCA iniciado con éxito! El Keeper de Render hará la primera compra pronto.");
+
+            } catch (error) {
+                console.error("Fallo al iniciar el contrato DCA:", error);
+                alert("❌ Fallo al iniciar el contrato DCA. El monto de USDT ha sido aprobado, pero no se configuró el plan.");
+            }
+            
+            // Restablecer estado del botón
+            document.getElementById('startDCA').disabled = false;
+            document.getElementById('startDCA').innerText = '💰 Iniciar DCA y Aprobar Fondos';
+        }
+    </script>
+
+</body>
+</html>
