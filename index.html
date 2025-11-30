@@ -2,8 +2,9 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Klever DCA - Prueba de Conexión KLV</title>
+    <title>Klever DCA - Configuración de Plan</title>
     <style>
+        /* [ ... ESTILOS CSS SIMILARES A LOS ANTERIORES ... ] */
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; text-align: center; background-color: #f0f4f8; }
         .container { max-width: 500px; margin: 0 auto; padding: 30px; background-color: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); }
         h2 { color: #1e3a8a; }
@@ -46,12 +47,17 @@
             border-radius: 50%;
             margin-left: 5px;
         }
+        .step-info {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h2>Prueba: Envío de KLV en Klever Testnet 🚀</h2>
+        <h2>Klever DCA - Configuración de Plan</h2>
         <hr>
         
         <div id="wallet-display">
@@ -67,39 +73,50 @@
 
         <hr>
 
-        <h3>Configuración de la Transacción</h3>
-        <p style="font-size: 0.9em; color: #777;">Se enviará KLV a: <strong>klv1c3qw2y...vmcfcd</strong></p>
+        <h3>Configuración del Plan DCA</h3>
         <div class="form-group">
-            <label for="klv-amount">Cantidad de KLV a Enviar:</label>
-            <input type="number" id="klv-amount" value="1" min="0.001">
+            <label for="total-amount">Monto Total a Depositar (USDT):</label>
+            <input type="number" id="total-amount" value="100" min="1" step="1">
+        </div>
+        <div class="form-group">
+            <label for="duration">Duración (Meses):</label>
+            <input type="number" id="duration" value="6" min="1">
         </div>
         
-        <button id="startDCA" class="button" onclick="sendKLVTest()" disabled>
-            🚀 Enviar KLV de Prueba
+        <button id="startDCA" class="button" onclick="startDCA()" disabled>
+            💰 Iniciar DCA y Aprobar Fondos (2 Pasos)
         </button>
+        <div id="step-info" class="step-info"></div>
         
     </div>
 
     <script>
-        const TARGET_TESTNET_ADDRESS = 'klv1c3qw2yzgdu0hzwd9arjz6j4ypmf9xya3y2238cmhcsnz26m66y3qvmcfcd';
+        // --- CONSTANTES ---
         const KLV_DECIMALS = 6; 
-        const TX_TYPE_SEND = 0; // Tipo de transacción 0 = Send (Envío nativo)
+        const USDT_DECIMALS = 6; 
+        const TX_TYPE_KAPP_CALL = 100; // Para llamar al contrato DCA
+        const TX_TYPE_KDA_SEND = 2000; // Para aprobar/enviar un KDA (USDT)
 
-        // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN ---
+        // ** PLACEHOLDERS DE CONTRATO (Debe reemplazarlos con los reales de Testnet) **
+        const KLV_USDT_CONTRACT_ID = 'KLV_TESTNET_USDT_CONTRACT_ADDRESS'; // Ejemplo: klv1qwe... (Buscar ID real de USDT Testnet)
+        const DCA_CONTRACT_ADDRESS = 'klv1xyz...'; // Ejemplo: klv1qwe... (Su contrato DCA)
 
-        function checkFormAndEnableKLVTest() {
-            const klvAmount = parseFloat(document.getElementById('klv-amount').value);
-            const sendButton = document.getElementById('startDCA');
+        // --- FUNCIONES DE UTILIDAD ---
+
+        function checkFormAndEnableDCA() {
+            const totalAmount = parseFloat(document.getElementById('total-amount').value);
+            const duration = parseInt(document.getElementById('duration').value);
+            const startButton = document.getElementById('startDCA');
             
             const isConnected = !!window.kleverWeb && !!window.kleverWeb.getWalletAddress();
-            const isAmountValid = klvAmount > 0;
+            const isValid = totalAmount > 0 && duration > 0;
 
-            if (isConnected && isAmountValid) {
-                sendButton.disabled = false;
-                sendButton.title = '';
+            if (isConnected && isValid) {
+                startButton.disabled = false;
+                startButton.title = '';
             } else {
-                sendButton.disabled = true;
-                sendButton.title = isConnected ? 'Introduce un monto válido.' : 'Conecta la wallet para habilitar.';
+                startButton.disabled = true;
+                startButton.title = isConnected ? 'Introduce montos válidos.' : 'Conecta la wallet para habilitar.';
             }
         }
 
@@ -107,7 +124,6 @@
 
         async function connectKleverWallet() {
             const connectButton = document.getElementById('connectWallet');
-
             connectButton.disabled = true;
             connectButton.innerText = 'Conectando...';
 
@@ -118,13 +134,12 @@
 
                 const web = window.kleverWeb;
 
-                // 🔑 SOLUCIÓN CLAVE: FORZAR A TESTNET
+                // FORZAR A TESTNET (Solución de los técnicos)
                 const provider = {
                     api: 'https://api.testnet.klever.org',
                     node: 'https://node.testnet.klever.org',
                 };
                 web.setProvider(provider);
-                // ------------------------------------
 
                 await web.initialize();
                 const userAddress = web.getWalletAddress();
@@ -132,14 +147,14 @@
                 if (!userAddress) {
                     throw new Error("Conexión fallida. Asegúrate de estar loggeado en la extensión.");
                 }
-
-                const shortAddress = userAddress.substring(0, 7) + '...' + userAddress.substring(userAddress.length - 7);
                 
+                // Mostrar estado conectado
+                const shortAddress = userAddress.substring(0, 7) + '...' + userAddress.substring(userAddress.length - 7);
                 document.getElementById('connectWallet').style.display = 'none';
                 document.getElementById('wallet-info').style.display = 'block';
                 document.getElementById('connected-address').innerText = shortAddress;
                 
-                checkFormAndEnableKLVTest();
+                checkFormAndEnableDCA();
 
             } catch (error) {
                 console.error("Error al conectar Klever Wallet:", error.message);
@@ -149,75 +164,114 @@
                 document.getElementById('connectWallet').style.display = 'block';
                 document.getElementById('wallet-info').style.display = 'none';
                 
-                checkFormAndEnableKLVTest(); 
+                checkFormAndEnableDCA(); 
             }
         }
 
-        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (3 PASOS, TIPO DE DATO CORREGIDO) ---
+        // --- FUNCIÓN PRINCIPAL DEL DCA (2 TRANSACCIONES) ---
         
-        async function sendKLVTest() {
-            const klvAmount = document.getElementById('klv-amount').value;
+        async function startDCA() {
+            const totalAmount = document.getElementById('total-amount').value;
+            const durationMonths = document.getElementById('duration').value;
+            const startButton = document.getElementById('startDCA');
+            const stepInfo = document.getElementById('step-info');
 
-            if (!window.kleverWeb.getWalletAddress() || parseFloat(klvAmount) <= 0) {
-                 alert("Error de estado: Verifica la conexión y los campos.");
-                 return;
-            }
-
-            const sendButton = document.getElementById('startDCA');
-            sendButton.disabled = true;
-            sendButton.innerText = `Enviando ${klvAmount} KLV...`;
-
+            startButton.disabled = true;
+            stepInfo.innerText = 'Iniciando el proceso de 2 pasos...';
+            
             try {
-                console.log(`Iniciando transferencia de ${klvAmount} KLV a ${TARGET_TESTNET_ADDRESS} (3 pasos)...`);
+                // Monto atómico para la transacción
+                const atomicAmount = Math.round(parseFloat(totalAmount) * (10 ** USDT_DECIMALS)); 
+
+                // =========================================================
+                // PASO 1: APROBACIÓN (Permitir al Contrato DCA gastar USDT)
+                // =========================================================
+                stepInfo.innerText = '1/2: Solicitando Aprobación de USDT...';
                 
-                // 1. CONSTRUCCIÓN: Aseguramos que el amount sea un tipo Number (int64)
-                const atomicAmount = Math.round(parseFloat(klvAmount) * (10 ** KLV_DECIMALS)); 
-                
-                const payload = {
-                    receiver: TARGET_TESTNET_ADDRESS,
-                    amount: atomicAmount, 
-                    kda: "KLV",
+                // ** Lógica de Aprobación **
+                // La aprobación es una llamada al contrato del token (USDT)
+                const approvalPayload = {
+                    receiver: DCA_CONTRACT_ADDRESS, // El contrato DCA es el SPENDER
+                    amount: atomicAmount,
+                    kda: KLV_USDT_CONTRACT_ID,
+                    // assetId se usa si fuera un envío nativo, pero para KDA se usa KDA en el payload
                 };
 
-                const unsignedTransaction = await window.kleverWeb.buildTransaction([
+                let unsignedTx = await window.kleverWeb.buildTransaction([
                     {
-                        payload,
-                        type: TX_TYPE_SEND, 
+                        payload: approvalPayload,
+                        type: TX_TYPE_KDA_SEND, // El tipo de KDA Send se usa para transferir KDA o aprobar
+                        // En Klever, la aprobación es a menudo una transferencia KDA
+                    },
+                ]);
+                
+                let signedTx = await window.kleverWeb.signTransaction(unsignedTx);
+                let { data: approvalData, error: approvalError } = await window.kleverWeb.broadcastTransactions([signedTx]);
+                
+                if (approvalError && approvalError.length > 0) {
+                    throw new Error(`Fallo en Aprobación: ${approvalError[0].message || approvalError[0]}`);
+                }
+                
+                const approvalHash = approvalData.txsHashes[0];
+                console.log(`Aprobación TX Hash: ${approvalHash}`);
+                stepInfo.innerText = `1/2: Aprobación exitosa. TX: ${approvalHash}. Esperando confirmación...`;
+
+                // ESPERAR UN MOMENTO PARA QUE LA APROBACIÓN SE CONFIRME EN LA RED
+                await new Promise(resolve => setTimeout(resolve, 5000)); 
+
+
+                // =========================================================
+                // PASO 2: INICIO DCA (Llamada al Contrato DCA)
+                // =========================================================
+                stepInfo.innerText = '2/2: Iniciando el Contrato DCA...';
+
+                // ** Lógica de Llamada a Contrato initDCA **
+                const initDCAPayload = {
+                    appId: DCA_CONTRACT_ADDRESS, // ID de la K-App DCA
+                    callValue: "0",              // No enviamos KLV, el valor es el USDT que ya aprobamos
+                    func: "initDCA",             // Nombre de la función en la K-App
+                    // Argumentos codificados para initDCA(durationMonths)
+                    arguments: [
+                        { type: 'Int64', value: durationMonths } // Pasar duración como Int64 al contrato
+                    ]
+                };
+
+                unsignedTx = await window.kleverWeb.buildTransaction([
+                    {
+                        payload: initDCAPayload,
+                        type: TX_TYPE_KAPP_CALL, // Tipo para llamada a K-App
                     },
                 ]);
 
-                // 2. FIRMA
-                const signedTransaction = await window.kleverWeb.signTransaction(
-                    unsignedTransaction
-                );
-
-                // 3. BROADCAST
-                const { data, error } = await window.kleverWeb.broadcastTransactions([
-                    signedTransaction,
-                ]);
+                signedTx = await window.kleverWeb.signTransaction(unsignedTx);
+                let { data: dcaData, error: dcaError } = await window.kleverWeb.broadcastTransactions([signedTx]);
                 
-                if (error && error.length > 0) {
-                    throw new Error(`Error en el broadcast: ${error[0].message || error[0]}`);
+                if (dcaError && dcaError.length > 0) {
+                    throw new Error(`Fallo en initDCA: ${dcaError[0].message || dcaError[0]}`);
                 }
 
-                const hash = data.txsHashes[0];
+                const dcaHash = dcaData.txsHashes[0];
+                console.log(`DCA Inicio TX Hash: ${dcaHash}`);
+                
+                alert(`✅ ¡Plan DCA iniciado con éxito! TX Hash Final: ${dcaHash}`);
+                stepInfo.innerText = `Plan DCA iniciado. TX Final: ${dcaHash}`;
 
-                console.log("Transferencia TX ID:", hash);
-                alert(`🎉 ¡Transferencia de KLV enviada con éxito! TX Hash: ${hash}`);
 
             } catch (error) {
-                console.error("Fallo al enviar KLV:", error);
-                alert(`❌ Fallo en la transferencia de KLV. Error: ${String(error)}. El problema de red debería estar resuelto. Asegúrate que tienes saldo.`);
+                console.error("Fallo completo en el DCA:", error);
+                alert(`❌ Fallo al iniciar DCA. Error: ${String(error)}.`);
+                stepInfo.innerText = 'Proceso fallido. Revise la consola.';
             }
             
-            sendButton.disabled = false;
-            sendButton.innerText = '🚀 Enviar KLV de Prueba';
-            checkFormAndEnableKLVTest();
+            startButton.disabled = false;
+            startButton.innerText = '💰 Iniciar DCA y Aprobar Fondos (2 Pasos)';
+            checkFormAndEnableDCA();
         }
         
-        // --- LISTENERS DE LA PÁGINA ---
+        // --- LISTENERS ---
 
-        document.getElementById('klv-amount').addEventListener('input', checkFormAndEnableKLVTest);
+        document.getElementById('total-amount').addEventListener('input', checkFormAndEnableDCA);
+        document.getElementById('duration').addEventListener('input', checkFormAndEnableDCA);
 
         window.onload = () => {
              setTimeout(connectKleverWallet, 500); 
