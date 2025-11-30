@@ -83,7 +83,7 @@
     <script>
         const TARGET_TESTNET_ADDRESS = 'klv1c3qw2yzgdu0hzwd9arjz6j4ypmf9xya3y2238cmhcsnz26m66y3qvmcfcd';
         const KLV_DECIMALS = 6; 
-        const TX_TYPE_SEND = 0;
+        const TX_TYPE_SEND = 0; // Tipo de transacción 0 = Send (Envío nativo)
 
         // --- FUNCIONES DE VERIFICACIÓN Y HABILITACIÓN ---
 
@@ -103,7 +103,7 @@
             }
         }
 
-        // --- FUNCIÓN DE CONEXIÓN ---
+        // --- FUNCIÓN DE CONEXIÓN (CON setProvider) ---
 
         async function connectKleverWallet() {
             const connectButton = document.getElementById('connectWallet');
@@ -116,8 +116,18 @@
                     throw new Error("Klever Extension not found");
                 }
 
-                await window.kleverWeb.initialize();
-                const userAddress = window.kleverWeb.getWalletAddress();
+                const web = window.kleverWeb;
+
+                // 🔑 SOLUCIÓN CLAVE: FORZAR A TESTNET
+                const provider = {
+                    api: 'https://api.testnet.klever.org',
+                    node: 'https://node.testnet.klever.org',
+                };
+                web.setProvider(provider);
+                // ------------------------------------
+
+                await web.initialize();
+                const userAddress = web.getWalletAddress();
                 
                 if (!userAddress) {
                     throw new Error("Conexión fallida. Asegúrate de estar loggeado en la extensión.");
@@ -143,7 +153,7 @@
             }
         }
 
-        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (CORRECCIÓN FINAL DE DATA TYPE) ---
+        // --- FUNCIÓN DE PRUEBA DE ENVÍO DE KLV (3 PASOS, TIPO DE DATO CORREGIDO) ---
         
         async function sendKLVTest() {
             const klvAmount = document.getElementById('klv-amount').value;
@@ -160,12 +170,12 @@
             try {
                 console.log(`Iniciando transferencia de ${klvAmount} KLV a ${TARGET_TESTNET_ADDRESS} (3 pasos)...`);
                 
-                // CORRECCIÓN FINAL: Aseguramos que el amount sea un tipo Number (int64)
+                // 1. CONSTRUCCIÓN: Aseguramos que el amount sea un tipo Number (int64)
                 const atomicAmount = Math.round(parseFloat(klvAmount) * (10 ** KLV_DECIMALS)); 
                 
                 const payload = {
                     receiver: TARGET_TESTNET_ADDRESS,
-                    amount: atomicAmount, // AHORA ES UN NÚMERO
+                    amount: atomicAmount, 
                     kda: "KLV",
                 };
 
@@ -176,10 +186,12 @@
                     },
                 ]);
 
+                // 2. FIRMA
                 const signedTransaction = await window.kleverWeb.signTransaction(
                     unsignedTransaction
                 );
 
+                // 3. BROADCAST
                 const { data, error } = await window.kleverWeb.broadcastTransactions([
                     signedTransaction,
                 ]);
@@ -195,7 +207,7 @@
 
             } catch (error) {
                 console.error("Fallo al enviar KLV:", error);
-                alert(`❌ Fallo en la transferencia de KLV. Error: ${String(error)}. VERIFICA QUE ESTÉS EN TESTNET.`);
+                alert(`❌ Fallo en la transferencia de KLV. Error: ${String(error)}. El problema de red debería estar resuelto. Asegúrate que tienes saldo.`);
             }
             
             sendButton.disabled = false;
