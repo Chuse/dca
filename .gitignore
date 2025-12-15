@@ -1,9 +1,58 @@
+# Dependencies
 node_modules/
-.env
-.DS_Store
-*.log
 package-lock.json
 yarn.lock
+pnpm-lock.yaml
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
 .vscode/
 .idea/
-.railway/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# Build
+dist/
+build/
+coverage/
+.cache/
+.temp/
+
+# Testing
+.nyc_output
+
+# Misc
+*.pem
+*.key
+privateKeys/
+secrets/
