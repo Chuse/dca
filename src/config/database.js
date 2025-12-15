@@ -1,4 +1,9 @@
-// Si existe DATABASE_URL, úsala (Railway)
+import { Sequelize } from 'sequelize';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+// Railway proporciona DATABASE_URL, usarla si existe
 const sequelize = process.env.DATABASE_URL 
   ? new Sequelize(process.env.DATABASE_URL, {
       dialect: 'postgres',
@@ -8,7 +13,13 @@ const sequelize = process.env.DATABASE_URL
           rejectUnauthorized: false
         }
       },
-      logging: false
+      logging: process.env.NODE_ENV === 'development' ? console.log : false,
+      pool: {
+        max: 5,
+        min: 0,
+        acquire: 30000,
+        idle: 10000
+      }
     })
   : new Sequelize({
       host: process.env.DB_HOST || 'localhost',
@@ -17,5 +28,25 @@ const sequelize = process.env.DATABASE_URL
       username: process.env.DB_USER || 'postgres',
       password: process.env.DB_PASSWORD,
       dialect: 'postgres',
-      logging: false
+      logging: process.env.NODE_ENV === 'development' ? console.log : false,
+      pool: {
+        max: 5,
+        min: 0,
+        acquire: 30000,
+        idle: 10000
+      }
     });
+
+// Test connection
+export const testConnection = async () => {
+  try {
+    await sequelize.authenticate();
+    console.log('✅ Database connection established successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ Unable to connect to database:', error.message);
+    return false;
+  }
+};
+
+export default sequelize;
