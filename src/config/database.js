@@ -1,52 +1,36 @@
-import { Sequelize } from 'sequelize';
-import dotenv from 'dotenv';
+const { Pool } = require('pg');
 
-dotenv.config();
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? {
+    rejectUnauthorized: false
+  } : false,
+  max: 20, // Máximo de conexiones en el pool
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
 
-// Railway proporciona DATABASE_URL, usarla si existe
-const sequelize = process.env.DATABASE_URL 
-  ? new Sequelize(process.env.DATABASE_URL, {
-      dialect: 'postgres',
-      dialectOptions: {
-        ssl: {
-          require: true,
-          rejectUnauthorized: false
-        }
-      },
-      logging: process.env.NODE_ENV === 'development' ? console.log : false,
-      pool: {
-        max: 5,
-        min: 0,
-        acquire: 30000,
-        idle: 10000
-      }
-    })
-  : new Sequelize({
-      host: process.env.DB_HOST || 'localhost',
-      port: process.env.DB_PORT || 5432,
-      database: process.env.DB_NAME || 'dca_db',
-      username: process.env.DB_USER || 'postgres',
-      password: process.env.DB_PASSWORD,
-      dialect: 'postgres',
-      logging: process.env.NODE_ENV === 'development' ? console.log : false,
-      pool: {
-        max: 5,
-        min: 0,
-        acquire: 30000,
-        idle: 10000
-      }
-    });
+// Event listeners
+pool.on('connect', (client) => {
+  console.log('Nueva conexión al pool de PostgreSQL');
+});
 
-// Test connection
-export const testConnection = async () => {
-  try {
-    await sequelize.authenticate();
-    console.log('✅ Database connection established successfully');
-    return true;
-  } catch (error) {
-    console.error('❌ Unable to connect to database:', error.message);
-    return false;
+pool.on('error', (err, client) => {
+  console.error('Error inesperado en cliente PostgreSQL:', err);
+  process.exit(-1);
+});
+
+pool.on('remove', () => {
+  console.log('Cliente removido del pool');
+});
+
+// Test inicial de conexión
+pool.query('SELECT NOW()', (err, res) => {
+  if (err) {
+    console.error('Error al conectar a PostgreSQL:', err);
+  } else {
+    console.log('✓ Pool de PostgreSQL inicializado correctamente');
   }
-};
+});
 
-export default sequelize;
+module.exports = pool;
