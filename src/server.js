@@ -140,11 +140,11 @@ app.get('/api/dca/orders/:wallet_address', async (req, res) => {
     const { wallet_address } = req.params;
 
     const result = await pool.query(
-      `SELECT do.* 
-       FROM dca_orders do
-       JOIN users u ON do.user_id = u.id
+      `SELECT dca.* 
+       FROM dca_orders dca
+       JOIN users u ON dca.user_id = u.id
        WHERE u.wallet_address = $1
-       ORDER BY do.created_at DESC`,
+       ORDER BY dca.created_at DESC`,
       [wallet_address]
     );
 
@@ -262,12 +262,12 @@ async function checkAndExecuteDCA() {
 
     // Obtener órdenes que deben ejecutarse
     const result = await pool.query(
-      `SELECT do.*, u.wallet_address 
-       FROM dca_orders do
-       JOIN users u ON do.user_id = u.id
-       WHERE do.is_active = true 
-       AND do.next_execution <= NOW()
-       ORDER BY do.next_execution ASC
+      `SELECT dca.*, u.wallet_address 
+       FROM dca_orders dca
+       JOIN users u ON dca.user_id = u.id
+       WHERE dca.is_active = true 
+       AND dca.next_execution <= NOW()
+       ORDER BY dca.next_execution ASC
        LIMIT 10`
     );
 
