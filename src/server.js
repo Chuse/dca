@@ -2,39 +2,49 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
-const pool = require('./config/database');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// ============================================
+// DATABASE CONNECTION
+// ============================================
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+pool.on('connect', () => console.log('Nueva conexión al pool de PostgreSQL'));
+pool.on('error', (err) => console.error('Error en PostgreSQL:', err));
+pool.on('remove', () => console.log('Cliente removido del pool'));
+
+// ============================================
+// MIDDLEWARE
+// ============================================
 app.use(cors({
   origin: [
-    process.env.CORS_ORIGIN || 'https://magnificent-biscuit-0bd117.netlify.app',
+    process.env.CORS_ORIGIN,
     'http://localhost:3000',
     'http://localhost:5173'
   ],
   credentials: true
 }));
-
 app.use(express.json());
 
-// Logging middleware
+// Logging
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
 });
 
 // ============================================
-// RUTAS - HEALTH CHECK
+// HEALTH CHECK
 // ============================================
-
 app.get('/health', async (req, res) => {
   try {
-    // Verificar conexión a DB
     const dbCheck = await pool.query('SELECT NOW()');
-    
-    res.json({ 
+    res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
@@ -52,19 +62,15 @@ app.get('/health', async (req, res) => {
 });
 
 // ============================================
-// RUTAS - DCA API
+// USERS API
 // ============================================
-
-// Crear nuevo usuario o obtener existente
 app.post('/api/users', async (req, res) => {
   try {
     const { wallet_address } = req.body;
-    
     if (!wallet_address) {
       return res.status(400).json({ error: 'wallet_address es requerido' });
     }
 
-    // Intentar insertar, si existe devolver el existente
     const result = await pool.query(
       `INSERT INTO users (wallet_address) 
        VALUES ($1) 
@@ -81,23 +87,25 @@ app.post('/api/users', async (req, res) => {
   }
 });
 
+// ============================================
+// DCA ORDERS API
+// ============================================
+
 // Crear orden DCA
 app.post('/api/dca/create', async (req, res) => {
   try {
     const { wallet_address, token_from, token_to, amount, frequency } = req.body;
 
-    // Validaciones
     if (!wallet_address || !token_from || !token_to || !amount || !frequency) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
     }
 
-    // Validar monto
     const minAmount = parseFloat(process.env.MIN_TRANSACTION_AMOUNT || 1);
     const maxAmount = parseFloat(process.env.MAX_TRANSACTION_AMOUNT || 10000);
-    
+
     if (amount < minAmount || amount > maxAmount) {
-      return res.status(400).json({ 
-        error: `Monto debe estar entre ${minAmount} y ${maxAmount}` 
+      return res.status(400).json({
+        error: `Monto debe estar entre ${minAmount} y ${maxAmount}`
       });
     }
 
@@ -112,8 +120,6 @@ app.post('/api/dca/create', async (req, res) => {
     );
 
     const userId = userResult.rows[0].id;
-
-    // Calcular próxima ejecución
     const nextExecution = calculateNextExecution(frequency);
 
     // Crear orden DCA
@@ -155,7 +161,62 @@ app.get('/api/dca/orders/:wallet_address', async (req, res) => {
   }
 });
 
-// Obtener transacciones de un usuario
+// Cancelar orden DCA (con fee del 1%)
+app.delete('/api/dca/orders/:order_id', async (req, res) => {
+  try {
+    const { order_id } = req.params;
+    const { fee_amount, refund_amount } = req.body || {};
+
+    // Obtener la orden antes de cancelar
+    const orderResult = await pool.query(
+      'SELECT * FROM dca_orders WHERE id = $1',
+      [order_id]
+    );
+
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Orden no encontrada' });
+    }
+
+    const order = orderResult.rows[0];
+
+    // Marcar orden como inactiva
+    await pool.query(
+      'UPDATE dca_orders SET is_active = false, updated_at = NOW() WHERE id = $1',
+      [order_id]
+    );
+
+    // Crear transacción de cancelación en el historial
+    await pool.query(
+      `INSERT INTO transactions 
+       (dca_order_id, user_id, amount, token_from, token_to, status, error_message, executed_at) 
+       VALUES ($1, $2, $3, $4, $5, 'cancelled', $6, NOW())`,
+      [
+        order.id,
+        order.user_id,
+        order.amount,
+        order.token_from,
+        order.token_to,
+        `Cancelación manual. Fee (1%): ${fee_amount || '0'} ${order.token_from}. Devolución: ${refund_amount || order.amount} ${order.token_from}`
+      ]
+    );
+
+    console.log('[DCA] Orden cancelada:', order_id, '- Fee:', fee_amount);
+
+    res.json({
+      success: true,
+      message: 'Orden cancelada',
+      fee: fee_amount,
+      refund: refund_amount
+    });
+  } catch (error) {
+    console.error('Error cancelando orden:', error);
+    res.status(500).json({ error: 'Error al cancelar orden' });
+  }
+});
+
+// ============================================
+// TRANSACTIONS API
+// ============================================
 app.get('/api/transactions/:wallet_address', async (req, res) => {
   try {
     const { wallet_address } = req.params;
@@ -177,38 +238,15 @@ app.get('/api/transactions/:wallet_address', async (req, res) => {
   }
 });
 
-// Cancelar orden DCA
-app.delete('/api/dca/orders/:order_id', async (req, res) => {
-  try {
-    const { order_id } = req.params;
-
-    const result = await pool.query(
-      `UPDATE dca_orders 
-       SET is_active = false, updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [order_id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Orden no encontrada' });
-    }
-
-    console.log('[DCA] Orden cancelada:', order_id);
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Error cancelando orden:', error);
-    res.status(500).json({ error: 'Error al cancelar orden' });
-  }
-});
-
-// Estadísticas del usuario
+// ============================================
+// STATS API
+// ============================================
 app.get('/api/stats/:wallet_address', async (req, res) => {
   try {
     const { wallet_address } = req.params;
 
     const result = await pool.query(
-      `SELECT * FROM user_stats WHERE wallet_address = $1`,
+      'SELECT * FROM user_stats WHERE wallet_address = $1',
       [wallet_address]
     );
 
@@ -230,12 +268,11 @@ app.get('/api/stats/:wallet_address', async (req, res) => {
 });
 
 // ============================================
-// FUNCIONES AUXILIARES
+// HELPER FUNCTIONS
 // ============================================
-
 function calculateNextExecution(frequency) {
   const now = new Date();
-  
+
   switch (frequency) {
     case 'hourly':
       now.setHours(now.getHours() + 1);
@@ -250,17 +287,20 @@ function calculateNextExecution(frequency) {
       now.setMonth(now.getMonth() + 1);
       break;
     default:
-      now.setDate(now.getDate() + 1); // Default: daily
+      now.setDate(now.getDate() + 1);
   }
-  
+
   return now;
 }
 
+// ============================================
+// CRON JOBS - Ejecutar DCA
+// ============================================
 async function checkAndExecuteDCA() {
   try {
     console.log('[CRON] Verificando órdenes DCA pendientes...');
 
-    // Obtener órdenes que deben ejecutarse
+    // Obtener órdenes que deben ejecutarse (usando 'dca' como alias, no 'do')
     const result = await pool.query(
       `SELECT dca.*, u.wallet_address 
        FROM dca_orders dca
@@ -287,14 +327,13 @@ async function executeDCAOrder(order) {
   console.log(`[DCA] Ejecutando orden ${order.id}...`);
 
   try {
-    // AQUÍ IRÍA LA LÓGICA DE KLEVER
+    // TODO: Aquí iría la integración real con Klever Blockchain
     // Por ahora simulamos la ejecución
-    
-    // Simular transacción
-    const txHash = `simulated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    const txHash = `klv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const gasUsed = Math.random() * 0.001;
 
-    // Guardar transacción
+    // Guardar transacción exitosa
     await pool.query(
       `INSERT INTO transactions 
        (dca_order_id, user_id, tx_hash, amount, token_from, token_to, status, gas_used) 
@@ -314,13 +353,11 @@ async function executeDCAOrder(order) {
     // Actualizar próxima ejecución
     const nextExecution = calculateNextExecution(order.frequency);
     await pool.query(
-      `UPDATE dca_orders 
-       SET next_execution = $1, updated_at = NOW()
-       WHERE id = $2`,
+      'UPDATE dca_orders SET next_execution = $1, updated_at = NOW() WHERE id = $2',
       [nextExecution, order.id]
     );
 
-    console.log(`[DCA] ✓ Orden ${order.id} ejecutada exitosamente. TX: ${txHash}`);
+    console.log(`[DCA] ✓ Orden ${order.id} ejecutada. TX: ${txHash}`);
 
   } catch (error) {
     console.error(`[DCA] ✗ Error ejecutando orden ${order.id}:`, error);
@@ -343,53 +380,42 @@ async function executeDCAOrder(order) {
   }
 }
 
-// ============================================
-// CRON JOBS
-// ============================================
-
-// Verificar órdenes DCA cada hora
+// Cron: Verificar cada hora
 cron.schedule('0 * * * *', checkAndExecuteDCA);
-
-// Para testing más rápido, descomenta esto (cada 5 minutos)
-// cron.schedule('*/5 * * * *', checkAndExecuteDCA);
-
 console.log('✓ Cron jobs iniciados');
 
 // ============================================
-// MANEJO DE ERRORES
+// ERROR HANDLING
 // ============================================
-
 app.use((err, req, res, next) => {
   console.error('Error global:', err);
-  res.status(500).json({ 
+  res.status(500).json({
     error: 'Error interno del servidor',
     message: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
 // ============================================
-// INICIAR SERVIDOR
+// START SERVER
 // ============================================
-
 app.listen(PORT, '0.0.0.0', async () => {
   console.log('════════════════════════════════════════');
   console.log(`✓ Servidor corriendo en puerto ${PORT}`);
   console.log(`✓ Entorno: ${process.env.NODE_ENV || 'development'}`);
   console.log(`✓ CORS configurado para: ${process.env.CORS_ORIGIN}`);
-  
-  // Test de conexión a DB
+
   try {
     const result = await pool.query('SELECT NOW()');
-    console.log(`✓ Conectado a PostgreSQL`);
+    console.log('✓ Conectado a PostgreSQL');
     console.log(`✓ Hora del servidor DB: ${result.rows[0].now}`);
   } catch (error) {
     console.error('✗ Error conectando a PostgreSQL:', error.message);
   }
-  
+
   console.log('════════════════════════════════════════');
 });
 
-// Manejo de cierre graceful
+// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM recibido. Cerrando servidor...');
   pool.end(() => {
