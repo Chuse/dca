@@ -1,20 +1,17 @@
 /**
  * Sync Worker - Sincroniza pares de trading desde Swopus DEX
  * 
- * Funcionalidades:
- * - Fetch de pares cada X minutos (configurable)
- * - Upsert de tokens y pares en BD
- * - Cálculo de precios desde reserves
- * - Desactivación de pares sin liquidez
+ * Respeta el flag admin_disabled:
+ * - Si un par tiene admin_disabled=true, el sync NO lo reactiva
+ * - Solo el admin puede cambiar ese estado manualmente
  */
 
 const cron = require('node-cron');
 const swopus = require('../services/swopus');
 const syncQueries = require('../models/syncQueries');
 
-// Configuración
-const SYNC_INTERVAL_MINUTES = parseInt(process.env.SYNC_INTERVAL_MINUTES || '5');
-const MIN_RESERVE = parseInt(process.env.MIN_RESERVE || '1000000'); // 1 token con 6 decimales
+const SYNC_INTERVAL_MINUTES = parseInt(process.env.SYNC_INTERVAL_MINUTES || '30');
+const MIN_RESERVE = parseInt(process.env.MIN_RESERVE || '1000000');
 
 let pool = null;
 let isRunning = false;
@@ -38,8 +35,15 @@ async function syncSwopus() {
     // 1. Obtener gateway Swopus
     const gateway = await syncQueries.getGatewayBySlug(pool, 'swopus');
     if (!gateway) {
-      throw new Error('Gateway Swopus no encontrado en BD. Ejecutar migración primero.');
+      throw new Error('Gateway Swopus no encontrado en BD');
     }
+    
+    // Verificar si el gateway está deshabilitado por admin
+    if (gateway.admin_disabled) {
+      console.log('[SYNC] ⏸ Gateway Swopus deshabilitado por admin, saltando sync');
+      return { success: true, skipped: true, reason: 'gateway_disabled' };
+    }
+    
     console.log(`[SYNC] Gateway: ${gateway.name} (ID: ${gateway.id})`);
 
     // 2. Fetch datos de Swopus API
@@ -55,8 +59,8 @@ async function syncSwopus() {
     const validPairs = swopus.filterValidPairs(pairsData, MIN_RESERVE);
     console.log(`[SYNC] Pares con liquidez válida: ${validPairs.length}`);
 
-    // 4. Procesar tokens
-    const tokenCache = {}; // symbol -> id
+    // 4. Procesar tokens (respetando admin_disabled)
+    const tokenCache = {};
     console.log('[SYNC] Procesando tokens...');
     
     for (const [tokenId, tokenInfo] of Object.entries(tokensData)) {
@@ -73,7 +77,6 @@ async function syncSwopus() {
         });
         tokenCache[symbol] = token.id;
       } catch (err) {
-        // Si falla por constraint, intentar obtener el existente
         const existing = await syncQueries.getTokenBySymbol(pool, symbol);
         if (existing) {
           tokenCache[symbol] = existing.id;
@@ -82,10 +85,10 @@ async function syncSwopus() {
     }
     console.log(`[SYNC] Tokens en cache: ${Object.keys(tokenCache).length}`);
 
-    // 5. Procesar pares (bidireccionales)
+    // 5. Procesar pares (respetando admin_disabled)
     const updatedPairIds = [];
-    let pairsCreated = 0;
     let pairsUpdated = 0;
+    let pairsSkipped = 0;
 
     console.log('[SYNC] Procesando pares...');
     
@@ -96,14 +99,11 @@ async function syncSwopus() {
       const token0Id = tokenCache[token0Symbol];
       const token1Id = tokenCache[token1Symbol];
       
-      if (!token0Id || !token1Id) {
-        console.log(`[SYNC] ⚠ Saltando par ${token0Symbol}/${token1Symbol}: tokens no encontrados`);
-        continue;
-      }
+      if (!token0Id || !token1Id) continue;
 
       try {
         // Par directo: token0 -> token1
-        const pair1 = await syncQueries.upsertTradingPair(pool, {
+        const result1 = await syncQueries.upsertTradingPairRespectingAdmin(pool, {
           token_from_id: token0Id,
           token_to_id: token1Id,
           gateway_id: gateway.id,
@@ -111,35 +111,49 @@ async function syncSwopus() {
           reserve0: pair.reserve0,
           reserve1: pair.reserve1
         });
-        updatedPairIds.push(pair1.id);
+        
+        if (result1.skipped) {
+          pairsSkipped++;
+        } else {
+          updatedPairIds.push(result1.id);
+          pairsUpdated++;
+        }
 
         // Par inverso: token1 -> token0
-        const pair2 = await syncQueries.upsertTradingPair(pool, {
+        const result2 = await syncQueries.upsertTradingPairRespectingAdmin(pool, {
           token_from_id: token1Id,
           token_to_id: token0Id,
           gateway_id: gateway.id,
           pair_id_external: String(pair.pair_id),
-          reserve0: pair.reserve1, // invertido
-          reserve1: pair.reserve0  // invertido
+          reserve0: pair.reserve1,
+          reserve1: pair.reserve0
         });
-        updatedPairIds.push(pair2.id);
+        
+        if (result2.skipped) {
+          pairsSkipped++;
+        } else {
+          updatedPairIds.push(result2.id);
+          pairsUpdated++;
+        }
 
-        pairsUpdated += 2;
       } catch (err) {
         console.error(`[SYNC] Error procesando par ${token0Symbol}/${token1Symbol}:`, err.message);
       }
     }
 
-    // 6. Desactivar pares que ya no existen en Swopus
-    const deactivated = await syncQueries.deactivateStalePairs(pool, gateway.id, updatedPairIds);
+    // 6. Desactivar pares sin liquidez (respetando admin_disabled)
+    const deactivated = await syncQueries.deactivateStalePairsRespectingAdmin(
+      pool, gateway.id, updatedPairIds
+    );
     
-    // 7. Estadísticas finales
+    // 7. Estadísticas
     const stats = await syncQueries.getSyncStats(pool, gateway.id);
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
 
     console.log('[SYNC] ──────────────────────────────────────');
     console.log(`[SYNC] ✔ Sincronización completada en ${elapsed}s`);
     console.log(`[SYNC]   Pares actualizados: ${pairsUpdated}`);
+    console.log(`[SYNC]   Pares saltados (admin_disabled): ${pairsSkipped}`);
     console.log(`[SYNC]   Pares desactivados: ${deactivated.count}`);
     console.log(`[SYNC]   Total pares activos: ${stats.active_pairs}`);
     console.log('[SYNC] ══════════════════════════════════════');
@@ -147,6 +161,7 @@ async function syncSwopus() {
     return {
       success: true,
       pairsUpdated,
+      pairsSkipped,
       pairsDeactivated: deactivated.count,
       activePairs: parseInt(stats.active_pairs),
       elapsed
@@ -154,17 +169,14 @@ async function syncSwopus() {
 
   } catch (error) {
     console.error('[SYNC] ✗ Error en sincronización:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
+    return { success: false, error: error.message };
   } finally {
     isRunning = false;
   }
 }
 
 /**
- * Iniciar el sync worker con cron
+ * Iniciar el sync worker
  */
 function startSyncWorker(dbPool) {
   pool = dbPool;
@@ -175,7 +187,7 @@ function startSyncWorker(dbPool) {
   setTimeout(() => {
     console.log('[SYNC] Ejecutando sincronización inicial...');
     syncSwopus().catch(err => console.error('[SYNC] Error inicial:', err.message));
-  }, 5000); // Esperar 5 segundos para que el servidor esté listo
+  }, 5000);
   
   // Programar ejecuciones periódicas
   const cronExpression = `*/${SYNC_INTERVAL_MINUTES} * * * *`;
@@ -185,12 +197,10 @@ function startSyncWorker(dbPool) {
 }
 
 /**
- * Ejecutar sincronización manual (para API de admin)
+ * Ejecutar sincronización manual
  */
 async function runManualSync() {
-  if (!pool) {
-    throw new Error('Sync worker no inicializado');
-  }
+  if (!pool) throw new Error('Sync worker no inicializado');
   return syncSwopus();
 }
 
