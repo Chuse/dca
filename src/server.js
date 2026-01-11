@@ -33,6 +33,15 @@ app.use((req, res, next) => {
     next();
 });
 
+app.get('/', (req, res) => {
+  res.json({
+    name: 'KleverDCA API',
+    version: '1.0.0',
+    status: 'online',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ============================================
 // BASE DE DATOS
 // ============================================
