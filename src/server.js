@@ -179,6 +179,7 @@ app.get('/api/stats/:wallet_address', async (req, res) => {
     const result = await pool.query('SELECT * FROM user_stats WHERE wallet_address = $1', [req.params.wallet_address]);
     res.json(result.rows[0] || { total_dca_orders: 0, active_orders: 0, total_transactions: 0 });
   } catch (error) {
+    console.error('❌ Error en /api/stats:', error);  // 👈 AGREGAR ESTO
     res.status(500).json({ error: 'Error al obtener estadísticas' });
   }
 });
