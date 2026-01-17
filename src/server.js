@@ -142,9 +142,9 @@ app.post('/api/dca/create', async (req, res) => {
     const nextExecution = calculateNextExecution(frequency);
     
     const orderResult = await pool.query(
-      `INSERT INTO dca_orders (user_id, token_from, token_to, amount, frequency, next_execution, pair_id) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [userId, token_from, token_to, amount, frequency, nextExecution, pairId]
+      `INSERT INTO dca_orders (user_id, token_from, token_to, amount, amount_per_buy, frequency, next_execution, pair_id) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+     [userId, token_from, token_to, amount, amount, frequency, nextExecution, pairId]
     );
     
     console.log('✅ Orden creada:', orderResult.rows[0].id);
