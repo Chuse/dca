@@ -759,6 +759,43 @@ app.get('/api/admin/sync/status', async (req, res) => {
   }
 });
 
+// GET /api/dca/pairs - Pares DCA disponibles
+app.get('/api/dca/pairs', async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                tp.id as pair_id,
+                t_from.id as token_from_id,
+                t_from.symbol as token_from_symbol,
+                t_from.name as token_from_name,
+                t_from.logo_url as token_from_logo,
+                t_to.id as token_to_id,
+                t_to.symbol as token_to_symbol,
+                t_to.name as token_to_name,
+                t_to.logo_url as token_to_logo,
+                g.name as gateway_name,
+                tp.min_amount,
+                tp.max_amount
+            FROM trading_pairs tp
+            JOIN tokens t_from ON tp.token_from_id = t_from.id
+            JOIN tokens t_to ON tp.token_to_id = t_to.id
+            JOIN gateways g ON tp.gateway_id = g.id
+            WHERE tp.is_active = true 
+              AND t_from.is_active = true 
+              AND t_from.is_stablecoin = true
+              AND t_to.is_active = true 
+              AND g.is_active = true
+            ORDER BY t_from.symbol, t_to.symbol
+        `;
+        
+        const result = await pool.query(query);
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error getting DCA pairs:', error);
+        res.status(500).json({ error: 'Error al obtener pares DCA' });
+    }
+});
+
 // ============================================
 // HELPER FUNCTIONS
 // ============================================
