@@ -104,51 +104,47 @@ app.post('/api/dca/create', async (req, res) => {
     
     console.log('📝 Creando DCA:', { wallet_address, token_from, token_to, amount, frequency });
     
-    // 1. Buscar o CREAR usuario
-    let userResult = await pool.query(
-      'SELECT id FROM users WHERE wallet_address = $1',
+    if (!wallet_address || !token_from || !token_to || !amount || !frequency) {
+      return res.status(400).json({ error: 'Faltan campos requeridos' });
+    }
+    
+    const minAmount = parseFloat(process.env.MIN_TRANSACTION_AMOUNT || 1);
+    const maxAmount = parseFloat(process.env.MAX_TRANSACTION_AMOUNT || 10000);
+    if (amount < minAmount || amount > maxAmount) {
+      return res.status(400).json({ error: `Monto debe estar entre ${minAmount} y ${maxAmount}` });
+    }
+    
+    // 1. Buscar pair_id
+    const pairResult = await pool.query(
+      `SELECT tp.id FROM trading_pairs tp
+       JOIN tokens t1 ON tp.token_from_id = t1.id
+       JOIN tokens t2 ON tp.token_to_id = t2.id
+       WHERE t1.symbol = $1 AND t2.symbol = $2 AND tp.is_active = true
+       LIMIT 1`,
+      [token_from, token_to]
+    );
+    
+    if (pairResult.rows.length === 0) {
+      return res.status(400).json({ error: `Par ${token_from}/${token_to} no disponible` });
+    }
+    
+    const pairId = pairResult.rows[0].id;
+    
+    // 2. Buscar o crear usuario
+    const userResult = await pool.query(
+      `INSERT INTO users (wallet_address) VALUES ($1) 
+       ON CONFLICT (wallet_address) DO UPDATE SET updated_at = NOW() RETURNING id`,
       [wallet_address]
     );
+    const userId = userResult.rows[0].id;
     
-    let userId;
-    if (userResult.rows.length === 0) {
-      // Crear usuario nuevo
-      const newUser = await pool.query(
-        'INSERT INTO users (wallet_address) VALUES ($1) RETURNING id',
-        [wallet_address]
-      );
-      userId = newUser.rows[0].id;
-      console.log('👤 Usuario creado:', userId);
-    } else {
-      userId = userResult.rows[0].id;
-    }
+    // 3. Crear orden
+    const nextExecution = calculateNextExecution(frequency);
     
-    // 2. Calcular próxima ejecución
-    const nextExecution = new Date();
-    switch(frequency) {
-      case 'daily': nextExecution.setDate(nextExecution.getDate() + 1); break;
-      case 'weekly': nextExecution.setDate(nextExecution.getDate() + 7); break;
-      case 'biweekly': nextExecution.setDate(nextExecution.getDate() + 14); break;
-      case 'monthly': nextExecution.setMonth(nextExecution.getMonth() + 1); break;
-    }
-    
-    // 3. Crear orden DCA
-    const result = await pool.query(
-      `INSERT INTO dca_orders (user_id, token_from, token_to, amount, frequency, next_execution, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, true)
-       RETURNING *`,
-      [userId, token_from, token_to, amount, frequency, nextExecution]
-    );
-    
-    console.log('✅ Orden creada:', result.rows[0].id);
-    res.status(201).json(result.rows[0]);
-    
-  } catch (error) {
-    console.error('❌ Error creando DCA:', error.message);
-    console.error(error.stack);
-    res.status(500).json({ error: error.message });
-  }
-});
+    const orderResult = await pool.query(
+      `INSERT INTO dca_orders (user_id, token_from, token_to, amount, frequ
+
+
 app.get('/api/dca/orders/:wallet_address', async (req, res) => {
   try {
     const result = await pool.query(
