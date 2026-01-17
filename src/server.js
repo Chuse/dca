@@ -142,7 +142,19 @@ app.post('/api/dca/create', async (req, res) => {
     const nextExecution = calculateNextExecution(frequency);
     
     const orderResult = await pool.query(
-      `INSERT INTO dca_orders (user_id, token_from, token_to, amount, frequ
+      `INSERT INTO dca_orders (user_id, token_from, token_to, amount, frequency, next_execution, pair_id) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [userId, token_from, token_to, amount, frequency, nextExecution, pairId]
+    );
+    
+    console.log('✅ Orden creada:', orderResult.rows[0].id);
+    res.json(orderResult.rows[0]);
+    
+  } catch (error) {
+    console.error('❌ Error creando DCA:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 
 app.get('/api/dca/orders/:wallet_address', async (req, res) => {
