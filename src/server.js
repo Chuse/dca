@@ -176,11 +176,27 @@ app.get('/api/transactions/:wallet_address', async (req, res) => {
 
 app.get('/api/stats/:wallet_address', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM user_stats WHERE wallet_address = $1', [req.params.wallet_address]);
-    res.json(result.rows[0] || { total_dca_orders: 0, active_orders: 0, total_transactions: 0 });
+    console.log('📊 Stats para:', req.params.wallet_address);
+    
+    const result = await pool.query(
+      'SELECT * FROM user_stats WHERE wallet_address = $1', 
+      [req.params.wallet_address]
+    );
+    
+    if (result.rows.length === 0) {
+      // Usuario nuevo - devolver stats vacíos
+      return res.json({ 
+        active_orders: 0, 
+        successful_transactions: 0, 
+        total_volume: 0 
+      });
+    }
+    
+    res.json(result.rows[0]);
   } catch (error) {
-    console.error('❌ Error en /api/stats:', error);  // 👈 AGREGAR ESTO
-    res.status(500).json({ error: 'Error al obtener estadísticas' });
+    console.error('❌ Error en /api/stats:', error.message);
+    console.error(error.stack);
+    res.status(500).json({ error: error.message });
   }
 });
 
