@@ -116,7 +116,7 @@ async function syncBitcoinme(pool) {
       gateway = await createBitcoinmeGateway(pool);
     }
 
-    if (!gateway.is_active) {
+    if (gateway.admin_disabled) {
       console.log('[Sync] Gateway "bitcoinme" is disabled by admin. Skipping.');
       return { skipped: true, reason: 'gateway_disabled' };
     }
