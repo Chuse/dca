@@ -926,8 +926,8 @@ app.listen(PORT, '0.0.0.0', async () => {
   }
 
   if (process.env.ENABLE_SYNC_WORKER !== 'false') {
-    const { startSyncWorker } = require('./workers/syncWorker');
-    startSyncWorker(pool);
+    const { startSyncScheduler } = require('./workers/syncWorker');
+    startSyncScheduler(pool);
   } else {
     console.log('⏸ Sync Worker deshabilitado');
   }
