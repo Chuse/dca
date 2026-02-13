@@ -15,8 +15,8 @@
  * The syncWorker can call both services and upsert into the same tables.
  */
 
-const BITCOINME_API_URL = process.env.BITCOINME_API_URL || 'https://api.defi.bitcoin.me';
-const BITCOINME_TESTNET_URL = process.env.BITCOINME_TESTNET_URL || 'https://api.testnet.defi.bitcoin.me';
+const BITCOINME_API_URL = process.env.BITCOINME_API_URL || 'https://api.bitcoin.me';
+const BITCOINME_TESTNET_URL = process.env.BITCOINME_TESTNET_URL || 'https://api.testnet.bitcoin.me';
 
 // Use testnet if KLEVER_NETWORK env is set to 'testnet'
 function getBaseUrl() {
