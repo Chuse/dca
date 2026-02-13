@@ -1,408 +1,348 @@
 /**
- * Sync Worker - Sincroniza pares de trading desde múltiples DEX
- * 
- * Soporta:
- * - Swopus DEX (API con pares y reservas)
- * - Digiko DEX (API con precios de tokens)
- * 
- * Respeta el flag admin_disabled:
- * - Si un par tiene admin_disabled=true, el sync NO lo reactiva
- * - Solo el admin puede cambiar ese estado manualmente
+ * KleverDCA — Sync Worker
+ * Sincroniza tokens y pares de trading desde Bitcoin.me DeFi
+ *
+ * CAMBIOS vs versión anterior:
+ *   - Bitcoin.me DeFi como único gateway activo
+ *   - Swopus y Digiko desactivados (no eliminados, por si necesitas reactivar)
+ *   - Usa services/bitcoinme.js para fetch + mapping
+ *   - Descarga iconos localmente para no depender de URLs externas
+ *   - Precio USD de cada token almacenado para referencia del P2P
+ *
+ * CRON: Cada 30 minutos (configurable via SYNC_INTERVAL_MINUTES)
  */
 
 const cron = require('node-cron');
-const swopus = require('../services/swopus');
-const digiko = require('../services/digiko');
+const bitcoinme = require('../services/bitcoinme');
 const syncQueries = require('../models/syncQueries');
+const path = require('path');
+const fs = require('fs');
 
-const SYNC_INTERVAL_MINUTES = parseInt(process.env.SYNC_INTERVAL_MINUTES || '30');
-const MIN_RESERVE = parseInt(process.env.MIN_RESERVE || '1000000');
+// ════════════════════════════════════════
+// Configuration
+// ════════════════════════════════════════
 
-let pool = null;
-let isRunning = false;
+const SYNC_INTERVAL_MINUTES = parseInt(process.env.SYNC_INTERVAL_MINUTES) || 30;
+const MIN_RESERVE = parseInt(process.env.MIN_RESERVE) || 1000000;
+const DOWNLOAD_ICONS = process.env.DOWNLOAD_ICONS !== 'false'; // default true
+const ICONS_DIR = process.env.ICONS_DIR || path.join(__dirname, '..', 'public', 'img', 'tokens');
 
-// ════════════════════════════════════════════════════════════════
-// SWOPUS SYNC
-// ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════
+// Icon downloader
+// ════════════════════════════════════════
 
 /**
- * Sincronizar pares desde Swopus
+ * Download a token icon to local filesystem
+ * Returns the local path on success, original URL on failure
  */
-async function syncSwopus() {
-  console.log('[SYNC:SWOPUS] Iniciando sincronización...');
+async function downloadIcon(iconUrl, symbol) {
+  if (!iconUrl || !DOWNLOAD_ICONS) return iconUrl;
 
   try {
-    // 1. Obtener gateway Swopus
-    const gateway = await syncQueries.getGatewayBySlug(pool, 'swopus');
-    if (!gateway) {
-      console.log('[SYNC:SWOPUS] Gateway no encontrado, saltando');
-      return { success: false, error: 'Gateway not found' };
+    // Ensure directory exists
+    if (!fs.existsSync(ICONS_DIR)) {
+      fs.mkdirSync(ICONS_DIR, { recursive: true });
     }
-    
-    // Verificar si el gateway está deshabilitado por admin
-    if (gateway.admin_disabled) {
-      console.log('[SYNC:SWOPUS] ⏸ Gateway deshabilitado por admin, saltando');
-      return { success: true, skipped: true, reason: 'gateway_disabled' };
-    }
-    
-    console.log(`[SYNC:SWOPUS] Gateway: ${gateway.name} (ID: ${gateway.id})`);
 
-    // 2. Fetch datos de Swopus API
-    const data = await swopus.fetchPairs();
-    
-    const tokensData = data.tokens || {};
-    const pairsData = data.pairs || [];
-    
-    console.log(`[SYNC:SWOPUS] Recibidos: ${Object.keys(tokensData).length} tokens, ${pairsData.length} pares`);
+    const ext = path.extname(new URL(iconUrl).pathname) || '.png';
+    const filename = `${symbol.toLowerCase()}${ext}`;
+    const filepath = path.join(ICONS_DIR, filename);
 
-    // 3. Filtrar pares con liquidez válida
-    const validPairs = swopus.filterValidPairs(pairsData, MIN_RESERVE);
-    console.log(`[SYNC:SWOPUS] Pares con liquidez válida: ${validPairs.length}`);
-
-    // 4. Procesar tokens
-    const tokenCache = {};
-    
-    for (const [tokenId, tokenInfo] of Object.entries(tokensData)) {
-      const symbol = swopus.extractTokenSymbol(tokenId);
-      if (!symbol || tokenCache[symbol]) continue;
-      
-      try {
-        const token = await syncQueries.upsertToken(pool, {
-          symbol: symbol,
-          name: symbol,
-          logo_url: swopus.buildLogoUrl(tokenInfo.logoUrlProxy),
-          decimals: tokenInfo.precision || 6,
-          contract_address: tokenId
-        });
-        tokenCache[symbol] = token.id;
-      } catch (err) {
-        const existing = await syncQueries.getTokenBySymbol(pool, symbol);
-        if (existing) {
-          tokenCache[symbol] = existing.id;
-        }
+    // Skip if already downloaded and recent (< 24h)
+    if (fs.existsSync(filepath)) {
+      const stats = fs.statSync(filepath);
+      const ageHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
+      if (ageHours < 24) {
+        return `/img/tokens/${filename}`;
       }
     }
 
-    // 5. Procesar pares
-    const updatedPairIds = [];
-    let pairsUpdated = 0;
-    let pairsSkipped = 0;
-    
-    for (const pair of validPairs) {
-      const token0Symbol = swopus.extractTokenSymbol(pair.token0_id);
-      const token1Symbol = swopus.extractTokenSymbol(pair.token1_id);
-      
-      const token0Id = tokenCache[token0Symbol];
-      const token1Id = tokenCache[token1Symbol];
-      
-      if (!token0Id || !token1Id) continue;
+    const response = await fetch(iconUrl);
+    if (!response.ok) return iconUrl;
 
-      try {
-        // Par directo
-        const result1 = await syncQueries.upsertTradingPairRespectingAdmin(pool, {
-          token_from_id: token0Id,
-          token_to_id: token1Id,
-          gateway_id: gateway.id,
-          pair_id_external: String(pair.pair_id),
-          reserve0: pair.reserve0,
-          reserve1: pair.reserve1
-        });
-        
-        if (result1.skipped) pairsSkipped++;
-        else { updatedPairIds.push(result1.id); pairsUpdated++; }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(filepath, buffer);
 
-        // Par inverso
-        const result2 = await syncQueries.upsertTradingPairRespectingAdmin(pool, {
-          token_from_id: token1Id,
-          token_to_id: token0Id,
-          gateway_id: gateway.id,
-          pair_id_external: String(pair.pair_id),
-          reserve0: pair.reserve1,
-          reserve1: pair.reserve0
-        });
-        
-        if (result2.skipped) pairsSkipped++;
-        else { updatedPairIds.push(result2.id); pairsUpdated++; }
-
-      } catch (err) {
-        console.error(`[SYNC:SWOPUS] Error par ${token0Symbol}/${token1Symbol}:`, err.message);
-      }
-    }
-
-    // 6. Desactivar pares sin liquidez
-    const deactivated = await syncQueries.deactivateStalePairsRespectingAdmin(
-      pool, gateway.id, updatedPairIds
-    );
-    
-    console.log(`[SYNC:SWOPUS] ✔ Completado: ${pairsUpdated} actualizados, ${pairsSkipped} saltados (admin), ${deactivated.count} desactivados`);
-
-    return { success: true, pairsUpdated, pairsSkipped, pairsDeactivated: deactivated.count };
-
-  } catch (error) {
-    console.error('[SYNC:SWOPUS] ✗ Error:', error.message);
-    return { success: false, error: error.message };
+    console.log(`[Sync] Icon downloaded: ${symbol} → ${filename}`);
+    return `/img/tokens/${filename}`;
+  } catch (err) {
+    console.warn(`[Sync] Icon download failed for ${symbol}:`, err.message);
+    return iconUrl; // Fallback to remote URL
   }
 }
 
-// ════════════════════════════════════════════════════════════════
-// DIGIKO SYNC
-// ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════
+// Main sync function
+// ════════════════════════════════════════
 
-/**
- * Sincronizar pares desde Digiko
- */
-async function syncDigiko() {
-  console.log('[SYNC:DIGIKO] Iniciando sincronización...');
+async function syncBitcoinme(pool) {
+  const startTime = Date.now();
+  console.log('[Sync] ══════════════════════════════════════');
+  console.log('[Sync] Starting Bitcoin.me DeFi sync...');
 
   try {
-    // 1. Obtener o crear gateway Digiko
-    let gateway = await syncQueries.getGatewayBySlug(pool, 'digiko');
-    
+    // ── 1. Check API health ──
+    const health = await bitcoinme.healthCheck();
+    if (health.status !== 'OK') {
+      throw new Error('Bitcoin.me API unhealthy: ' + JSON.stringify(health));
+    }
+    console.log('[Sync] API health: OK');
+
+    // ── 2. Get or create gateway ──
+    let gateway = await syncQueries.getGatewayBySlug(pool, 'bitcoinme');
+
     if (!gateway) {
-      console.log('[SYNC:DIGIKO] Gateway no existe, creando...');
-      gateway = await createDigikoGateway();
+      console.log('[Sync] Creating "bitcoinme" gateway...');
+      gateway = await createBitcoinmeGateway(pool);
     }
-    
-    // Verificar si está deshabilitado
-    if (gateway.admin_disabled) {
-      console.log('[SYNC:DIGIKO] ⏸ Gateway deshabilitado por admin, saltando');
-      return { success: true, skipped: true, reason: 'gateway_disabled' };
-    }
-    
-    console.log(`[SYNC:DIGIKO] Gateway: ${gateway.name} (ID: ${gateway.id})`);
 
-    // 2. Fetch datos de Digiko API
-    const pricesData = await digiko.fetchPrices();
-    
-    if (!pricesData || !pricesData.prices) {
-      throw new Error('Respuesta inválida de Digiko API');
+    if (!gateway.is_active) {
+      console.log('[Sync] Gateway "bitcoinme" is disabled by admin. Skipping.');
+      return { skipped: true, reason: 'gateway_disabled' };
     }
-    
-    const tokensCount = Object.keys(pricesData.prices).length;
-    console.log(`[SYNC:DIGIKO] Recibidos: ${tokensCount} tokens`);
 
-    // 3. Procesar tokens
-    const tokenCache = {};
-    const tokens = digiko.parseTokens(pricesData);
-    
-    for (const tokenData of tokens) {
+    // ── 3. Fetch tokens and pools from API ──
+    console.log('[Sync] Fetching tokens and pools...');
+    const { tokens, pools } = await bitcoinme.fetchAll();
+    console.log(`[Sync] Received: ${tokens.length} tokens, ${pools.length} pools`);
+
+    // ── 4. Filter pools with valid liquidity ──
+    const validPools = bitcoinme.filterValidPools(pools, MIN_RESERVE);
+    console.log(`[Sync] Valid pools (reserve >= ${MIN_RESERVE}): ${validPools.length}`);
+
+    // ── 5. Process tokens ──
+    let tokensUpserted = 0;
+    let tokensSkipped = 0;
+
+    for (const token of tokens) {
+      const mapped = bitcoinme.mapTokenToDb(token);
+
+      // Download icon locally
+      if (mapped.logo_url) {
+        mapped.logo_url = await downloadIcon(mapped.logo_url, mapped.symbol);
+      }
+
       try {
-        const token = await syncQueries.upsertToken(pool, {
-          symbol: tokenData.symbol,
-          name: tokenData.name,
-          logo_url: digiko.buildLogoUrl(tokenData.symbol),
-          decimals: 6,
-          contract_address: null
+        await syncQueries.upsertToken(pool, {
+          symbol:           mapped.symbol,
+          name:             mapped.name,
+          decimals:         mapped.decimals,
+          logo_url:         mapped.logo_url,
+          contract_address: mapped.contract_address,
+          is_active:        mapped.is_active,
+          is_stablecoin:    mapped.is_stablecoin,
         });
-        tokenCache[tokenData.symbol] = token.id;
+        tokensUpserted++;
       } catch (err) {
-        const existing = await syncQueries.getTokenBySymbol(pool, tokenData.symbol);
-        if (existing) {
-          tokenCache[tokenData.symbol] = existing.id;
+        // Respect admin_disabled — upsertToken should handle this
+        console.warn(`[Sync] Token ${mapped.symbol} skipped:`, err.message);
+        tokensSkipped++;
+      }
+    }
+    console.log(`[Sync] Tokens: ${tokensUpserted} upserted, ${tokensSkipped} skipped`);
+
+    // ── 6. Process pools → trading pairs (bidirectional) ──
+    let pairsUpserted = 0;
+    let pairsSkipped = 0;
+
+    for (const p of validPools) {
+      const tradingPairs = bitcoinme.mapPoolToTradingPairs(p, gateway.id);
+
+      for (const tp of tradingPairs) {
+        // Resolve token IDs from symbols
+        const tokenFrom = await syncQueries.getTokenBySymbol(pool, tp.token_from_symbol);
+        const tokenTo = await syncQueries.getTokenBySymbol(pool, tp.token_to_symbol);
+
+        if (!tokenFrom || !tokenTo) {
+          pairsSkipped++;
+          continue;
+        }
+
+        try {
+          await syncQueries.upsertTradingPairRespectingAdmin(pool, {
+            token_from_id:    tokenFrom.id,
+            token_to_id:      tokenTo.id,
+            gateway_id:       gateway.id,
+            pair_id_external: tp.pair_id_external,
+            reserve0:         tp.reserve0,
+            reserve1:         tp.reserve1,
+          });
+          pairsUpserted++;
+        } catch (err) {
+          console.warn(`[Sync] Pair ${tp.token_from_symbol}→${tp.token_to_symbol} skipped:`, err.message);
+          pairsSkipped++;
         }
       }
     }
-    
-    console.log(`[SYNC:DIGIKO] Tokens procesados: ${Object.keys(tokenCache).length}`);
+    console.log(`[Sync] Pairs: ${pairsUpserted} upserted, ${pairsSkipped} skipped`);
 
-    // 4. Generar y procesar pares de trading
-    const pairs = digiko.generateTradingPairs(pricesData);
-    const updatedPairIds = [];
-    let pairsUpdated = 0;
-    let pairsSkipped = 0;
-    
-    for (const pair of pairs) {
-      const tokenFromId = tokenCache[pair.token_from];
-      const tokenToId = tokenCache[pair.token_to];
-      
-      if (!tokenFromId || !tokenToId) continue;
-      
-      try {
-        const result = await syncQueries.upsertTradingPairRespectingAdmin(pool, {
-          token_from_id: tokenFromId,
-          token_to_id: tokenToId,
-          gateway_id: gateway.id,
-          pair_id_external: pair.pair_id_external,
-          reserve0: pair.reserve0,
-          reserve1: pair.reserve1
-        });
-        
-        if (result.skipped) pairsSkipped++;
-        else { updatedPairIds.push(result.id); pairsUpdated++; }
-        
-      } catch (err) {
-        console.error(`[SYNC:DIGIKO] Error par ${pair.token_from}/${pair.token_to}:`, err.message);
-      }
-    }
+    // ── 7. Deactivate stale pairs ──
+    // Pairs that existed before but no longer have valid liquidity
+    const activeExternalIds = validPools.flatMap(p => [
+      p.scAddress,
+      p.scAddress + '_rev'
+    ]);
 
-    // 5. Desactivar pares que ya no existen
-    const deactivated = await syncQueries.deactivateStalePairsRespectingAdmin(
-      pool, gateway.id, updatedPairIds
+    await syncQueries.deactivateStalePairsRespectingAdmin(
+      pool,
+      gateway.id,
+      activeExternalIds
     );
-    
-    console.log(`[SYNC:DIGIKO] ✔ Completado: ${pairsUpdated} actualizados, ${pairsSkipped} saltados (admin), ${deactivated.count} desactivados`);
+    console.log('[Sync] Stale pairs deactivated');
 
-    return { success: true, pairsUpdated, pairsSkipped, pairsDeactivated: deactivated.count };
+    // ── 8. Update price cache ──
+    // Store latest USD prices for use by P2P reference pricing
+    await updatePriceCache(pool, tokens);
 
-  } catch (error) {
-    console.error('[SYNC:DIGIKO] ✗ Error:', error.message);
-    return { success: false, error: error.message };
+    // ── Done ──
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[Sync] ✅ Bitcoin.me sync complete in ${elapsed}s`);
+    console.log(`[Sync]    ${tokensUpserted} tokens, ${pairsUpserted} pairs`);
+    console.log('[Sync] ══════════════════════════════════════');
+
+    return {
+      success: true,
+      tokens: tokensUpserted,
+      pairs: pairsUpserted,
+      elapsed: parseFloat(elapsed),
+    };
+
+  } catch (err) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.error(`[Sync] ❌ Bitcoin.me sync failed after ${elapsed}s:`, err.message);
+    return { success: false, error: err.message };
   }
 }
 
-/**
- * Crear gateway Digiko si no existe
- */
-async function createDigikoGateway() {
+// ════════════════════════════════════════
+// Helper: Create gateway if not exists
+// ════════════════════════════════════════
+
+async function createBitcoinmeGateway(pool) {
   const result = await pool.query(`
-    INSERT INTO gateways (name, slug, logo_url, api_url, fee_percentage, is_active, admin_disabled)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO gateways (name, slug, api_url, is_active, admin_disabled)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (slug) DO UPDATE SET
+      name = EXCLUDED.name,
+      api_url = EXCLUDED.api_url
     RETURNING *
   `, [
-    'Digiko DEX',
-    'digiko',
-    'https://digiko.io/logo.png',
-    digiko.DIGIKO_API_URL,
-    0.3,
+    'Bitcoin.me DeFi',
+    'bitcoinme',
+    bitcoinme.getBaseUrl(),
     true,
     false
   ]);
-  
-  console.log('[SYNC:DIGIKO] Gateway creado con ID:', result.rows[0].id);
   return result.rows[0];
 }
 
-// ════════════════════════════════════════════════════════════════
-// SYNC ALL GATEWAYS
-// ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════
+// Helper: Update price cache
+// ════════════════════════════════════════
 
 /**
- * Sincronizar todos los gateways
+ * Store latest token prices for cross-product reference
+ * Used by P2P Marketplace to show "±X% vs DEX" and by DCA for execution
+ *
+ * If your DB doesn't have a token_prices table yet, this creates one.
+ * If you prefer to store prices in the tokens table, just modify this.
  */
-async function syncAll() {
-  if (isRunning) {
-    console.log('[SYNC] Ya hay una sincronización en curso, saltando...');
-    return { success: false, reason: 'already_running' };
+async function updatePriceCache(pool, tokens) {
+  // Ensure price cache table exists
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS token_prices (
+      symbol VARCHAR(20) PRIMARY KEY,
+      contract_address VARCHAR(100),
+      price_usd DECIMAL(20, 10) DEFAULT 0,
+      variation_pct DECIMAL(10, 4) DEFAULT 0,
+      last_volume VARCHAR(50) DEFAULT '0',
+      icon_url TEXT,
+      source VARCHAR(20) DEFAULT 'bitcoinme',
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  let updated = 0;
+  for (const token of tokens) {
+    const symbol = bitcoinme.extractTokenSymbol(token.tokenInID);
+    const priceUsd = parseFloat(token.price) || 0;
+
+    if (priceUsd > 0) {
+      await pool.query(`
+        INSERT INTO token_prices (symbol, contract_address, price_usd, variation_pct, last_volume, icon_url, source, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 'bitcoinme', NOW())
+        ON CONFLICT (symbol) DO UPDATE SET
+          price_usd = EXCLUDED.price_usd,
+          variation_pct = EXCLUDED.variation_pct,
+          last_volume = EXCLUDED.last_volume,
+          icon_url = EXCLUDED.icon_url,
+          source = EXCLUDED.source,
+          updated_at = NOW()
+      `, [symbol, token.tokenInID, priceUsd, token.variationPercent || 0, token.lastVolume || '0', token.iconURL]);
+      updated++;
+    }
   }
 
-  isRunning = true;
-  const startTime = Date.now();
-  
-  console.log('[SYNC] ══════════════════════════════════════');
-  console.log('[SYNC] Iniciando sincronización de todos los DEX...');
-  console.log('[SYNC] ══════════════════════════════════════');
+  console.log(`[Sync] Price cache: ${updated} tokens updated`);
+}
 
-  const results = {
-    swopus: null,
-    digiko: null
-  };
+// ════════════════════════════════════════
+// Helper: Disable other gateways
+// ════════════════════════════════════════
 
-  try {
-    // Sincronizar Swopus
-    results.swopus = await syncSwopus();
-    
-    // Sincronizar Digiko
-    results.digiko = await syncDigiko();
-    
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    
-    // Estadísticas finales
-    const stats = await getSyncStats();
-    
-    console.log('[SYNC] ══════════════════════════════════════');
-    console.log(`[SYNC] ✔ Sincronización completa en ${elapsed}s`);
-    console.log(`[SYNC]   Swopus: ${results.swopus.success ? '✔' : '✗'} ${results.swopus.pairsUpdated || 0} pares`);
-    console.log(`[SYNC]   Digiko: ${results.digiko.success ? '✔' : '✗'} ${results.digiko.pairsUpdated || 0} pares`);
-    console.log(`[SYNC]   Total pares activos: ${stats.totalActivePairs}`);
-    console.log(`[SYNC]   Total tokens: ${stats.totalTokens}`);
-    console.log('[SYNC] ══════════════════════════════════════');
+/**
+ * Deactivate Swopus and Digiko gateways
+ * Call once during migration, or on first run
+ */
+async function disableOtherGateways(pool) {
+  const result = await pool.query(`
+    UPDATE gateways
+    SET is_active = false
+    WHERE slug IN ('swopus', 'digiko')
+      AND is_active = true
+    RETURNING slug
+  `);
 
-    return { success: true, results, elapsed, stats };
-
-  } catch (error) {
-    console.error('[SYNC] ✗ Error general:', error.message);
-    return { success: false, error: error.message, results };
-  } finally {
-    isRunning = false;
+  if (result.rows.length > 0) {
+    const disabled = result.rows.map(r => r.slug).join(', ');
+    console.log(`[Sync] Disabled gateways: ${disabled}`);
   }
 }
 
-/**
- * Obtener estadísticas de sincronización
- */
-async function getSyncStats() {
-  try {
-    const pairsResult = await pool.query(
-      'SELECT COUNT(*) as count FROM trading_pairs WHERE is_active = true'
-    );
-    const tokensResult = await pool.query(
-      'SELECT COUNT(*) as count FROM tokens WHERE is_active = true'
-    );
-    
-    return {
-      totalActivePairs: parseInt(pairsResult.rows[0].count),
-      totalTokens: parseInt(tokensResult.rows[0].count)
-    };
-  } catch (err) {
-    return { totalActivePairs: 0, totalTokens: 0 };
-  }
-}
+// ════════════════════════════════════════
+// Cron scheduler
+// ════════════════════════════════════════
 
-// ════════════════════════════════════════════════════════════════
-// WORKER MANAGEMENT
-// ════════════════════════════════════════════════════════════════
+function startSyncScheduler(pool) {
+  console.log(`[Sync] Scheduler started — every ${SYNC_INTERVAL_MINUTES} minutes`);
+  console.log(`[Sync] Source: Bitcoin.me DeFi (${bitcoinme.getBaseUrl()})`);
+  console.log(`[Sync] Min reserve: ${MIN_RESERVE}`);
+  console.log(`[Sync] Icons: ${DOWNLOAD_ICONS ? 'local download → ' + ICONS_DIR : 'remote URLs'}`);
 
-/**
- * Iniciar el sync worker
- */
-function startSyncWorker(dbPool) {
-  pool = dbPool;
-  
-  console.log(`[SYNC] ✔ Sync Worker iniciado (cada ${SYNC_INTERVAL_MINUTES} minutos)`);
-  console.log('[SYNC]   Gateways: Swopus, Digiko');
-  
-  // Ejecutar inmediatamente al iniciar
-  setTimeout(() => {
-    console.log('[SYNC] Ejecutando sincronización inicial...');
-    syncAll().catch(err => console.error('[SYNC] Error inicial:', err.message));
-  }, 5000);
-  
-  // Programar ejecuciones periódicas
-  const cronExpression = `*/${SYNC_INTERVAL_MINUTES} * * * *`;
-  cron.schedule(cronExpression, () => {
-    syncAll().catch(err => console.error('[SYNC] Error en cron:', err.message));
+  // First run: disable other gateways and sync immediately
+  (async () => {
+    try {
+      await disableOtherGateways(pool);
+      await syncBitcoinme(pool);
+    } catch (err) {
+      console.error('[Sync] Initial sync failed:', err.message);
+    }
+  })();
+
+  // Schedule recurring sync
+  const cronExpr = `*/${SYNC_INTERVAL_MINUTES} * * * *`;
+  cron.schedule(cronExpr, async () => {
+    await syncBitcoinme(pool);
   });
 }
 
-/**
- * Ejecutar sincronización manual de todos los gateways
- */
-async function runManualSync() {
-  if (!pool) throw new Error('Sync worker no inicializado');
-  return syncAll();
-}
-
-/**
- * Ejecutar sincronización manual de un gateway específico
- */
-async function runManualSyncGateway(gatewaySlug) {
-  if (!pool) throw new Error('Sync worker no inicializado');
-  
-  switch (gatewaySlug.toLowerCase()) {
-    case 'swopus':
-      return syncSwopus();
-    case 'digiko':
-      return syncDigiko();
-    default:
-      throw new Error(`Gateway no soportado: ${gatewaySlug}`);
-  }
-}
+// ════════════════════════════════════════
+// Exports
+// ════════════════════════════════════════
 
 module.exports = {
-  startSyncWorker,
-  runManualSync,
-  runManualSyncGateway,
-  syncSwopus,
-  syncDigiko,
-  syncAll
+  syncBitcoinme,
+  startSyncScheduler,
+  disableOtherGateways,
+  updatePriceCache,
 };
