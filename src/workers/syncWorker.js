@@ -26,6 +26,19 @@ const SYNC_INTERVAL_MINUTES = parseInt(process.env.SYNC_INTERVAL_MINUTES) || 30;
 const MIN_RESERVE = parseInt(process.env.MIN_RESERVE) || 1000000;
 const DOWNLOAD_ICONS = process.env.DOWNLOAD_ICONS !== 'false'; // default true
 const ICONS_DIR = process.env.ICONS_DIR || path.join(__dirname, '..', 'public', 'img', 'tokens');
+const FETCH_TIMEOUT_MS = parseInt(process.env.FETCH_TIMEOUT_MS) || 15000;
+
+// ════════════════════════════════════════
+// Fetch with timeout (Node 18 compatible)
+// ════════════════════════════════════════
+
+function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT_MS, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timeout));
+}
 
 // ════════════════════════════════════════
 // Icon downloader
@@ -81,12 +94,19 @@ async function syncBitcoinme(pool) {
   console.log('[Sync] Starting Bitcoin.me DeFi sync...');
 
   try {
-    // ── 1. Check API health ──
-    const health = await bitcoinme.healthCheck();
-    if (health.status !== 'OK') {
-      throw new Error('Bitcoin.me API unhealthy: ' + JSON.stringify(health));
+    // ── 1. Check API health (non-blocking) ──
+    try {
+      const health = await fetchWithTimeout(bitcoinme.getBaseUrl() + '/health', 10000);
+      const data = await health.json();
+      if (data.status !== 'OK') {
+        console.warn('[Sync] API health unexpected:', JSON.stringify(data));
+      } else {
+        console.log('[Sync] API health: OK');
+      }
+    } catch (healthErr) {
+      console.warn('[Sync] API health check failed:', healthErr.message);
+      console.warn('[Sync] Will attempt sync anyway...');
     }
-    console.log('[Sync] API health: OK');
 
     // ── 2. Get or create gateway ──
     let gateway = await syncQueries.getGatewayBySlug(pool, 'bitcoinme');
@@ -326,6 +346,7 @@ function startSyncScheduler(pool) {
       await syncBitcoinme(pool);
     } catch (err) {
       console.error('[Sync] Initial sync failed:', err.message);
+      console.error('[Sync] Server continues running — will retry on next cron cycle');
     }
   })();
 
