@@ -297,6 +297,18 @@ app.get('/api/prices', async (req, res) => {
   }
 });
 
+app.get('/api/token-prices', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT symbol, contract_address, price_usd, variation_pct, last_volume, icon_url, source, updated_at
+       FROM token_prices ORDER BY symbol`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Error al obtener precios de tokens' });
+  }
+});
+
 app.get('/api/price/:from/:to', async (req, res) => {
   try {
     const { from, to } = req.params;
