@@ -204,12 +204,17 @@ async function syncBitcoinme(pool) {
       p.scAddress + '_rev'
     ]);
 
-    await syncQueries.deactivateStalePairsRespectingAdmin(
-      pool,
-      gateway.id,
-      activeExternalIds
-    );
-    console.log('[Sync] Stale pairs deactivated');
+    try {
+      await syncQueries.deactivateStalePairsRespectingAdmin(
+        pool,
+        gateway.id,
+        activeExternalIds
+      );
+      console.log('[Sync] Stale pairs deactivated');
+    } catch (staleErr) {
+      console.warn('[Sync] Stale pairs cleanup failed:', staleErr.message);
+      console.warn('[Sync] Continuing — this is non-critical');
+    }
 
     // ── 8. Update price cache ──
     // Store latest USD prices for use by P2P reference pricing
