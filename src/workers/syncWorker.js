@@ -116,8 +116,7 @@ async function syncBitcoinme(pool) {
       gateway = await createBitcoinmeGateway(pool);
     }
 
-    console.log('[Sync] Gateway data:', JSON.stringify(gateway));
-    if (gateway.admin_disabled) {
+    if (!gateway.is_active) {
       console.log('[Sync] Gateway "bitcoinme" is disabled by admin. Skipping.');
       return { skipped: true, reason: 'gateway_disabled' };
     }
@@ -165,6 +164,7 @@ async function syncBitcoinme(pool) {
     // ── 6. Process pools → trading pairs (bidirectional) ──
     let pairsUpserted = 0;
     let pairsSkipped = 0;
+    const upsertedPairIds = [];
 
     for (const p of validPools) {
       const tradingPairs = bitcoinme.mapPoolToTradingPairs(p, gateway.id);
@@ -180,7 +180,7 @@ async function syncBitcoinme(pool) {
         }
 
         try {
-          await syncQueries.upsertTradingPairRespectingAdmin(pool, {
+          const result = await syncQueries.upsertTradingPairRespectingAdmin(pool, {
             token_from_id:    tokenFrom.id,
             token_to_id:      tokenTo.id,
             gateway_id:       gateway.id,
@@ -188,6 +188,7 @@ async function syncBitcoinme(pool) {
             reserve0:         tp.reserve0,
             reserve1:         tp.reserve1,
           });
+          if (result && result.id) upsertedPairIds.push(result.id);
           pairsUpserted++;
         } catch (err) {
           console.warn(`[Sync] Pair ${tp.token_from_symbol}→${tp.token_to_symbol} skipped:`, err.message);
@@ -198,22 +199,14 @@ async function syncBitcoinme(pool) {
     console.log(`[Sync] Pairs: ${pairsUpserted} upserted, ${pairsSkipped} skipped`);
 
     // ── 7. Deactivate stale pairs ──
-    // Pairs that existed before but no longer have valid liquidity
-    const activeExternalIds = validPools.flatMap(p => [
-      p.scAddress,
-      p.scAddress + '_rev'
-    ]);
-
-    try {
+    // Pass the integer IDs of pairs we just upserted
+    if (upsertedPairIds.length > 0) {
       await syncQueries.deactivateStalePairsRespectingAdmin(
         pool,
         gateway.id,
-        activeExternalIds
+        upsertedPairIds
       );
       console.log('[Sync] Stale pairs deactivated');
-    } catch (staleErr) {
-      console.warn('[Sync] Stale pairs cleanup failed:', staleErr.message);
-      console.warn('[Sync] Continuing — this is non-critical');
     }
 
     // ── 8. Update price cache ──
